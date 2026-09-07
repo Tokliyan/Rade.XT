@@ -1,0 +1,32 @@
+name: Trading Bot
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run-agents:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        agent: [asx_bluechip_steady, asx_smallcap_growth, crypto_store_of_value]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run agent
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          EXCHANGE_API_KEY: ${{ secrets.EXCHANGE_API_KEY }}
+          EXCHANGE_API_SECRET: ${{ secrets.EXCHANGE_API_SECRET }}
+          CONFIRM_LIVE_TRADING: ${{ secrets.CONFIRM_LIVE_TRADING }}
+        run: python main.py --agent ${{ matrix.agent }}
