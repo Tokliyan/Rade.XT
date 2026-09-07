@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1b1e26;
+    --panel-raised: #21252f;
+    --hairline: #2b2f3a;
+    --hairline-strong: #3a3f4d;
+    --text: #e7e5dd;
+    --text-dim: #9297a6;
+    --text-faint: #656b7a;
+    --gain: #5fb98d;
+    --loss: #d1685a;
+    --paused: #d1a24a;
+    --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+    --font-num: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    padding: 32px 20px 60px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  header h1 { font-size: 20px; font-weight: 500; margin: 0; }
+  header .meta { font-size: 13px; color: var(--text-faint); font-family: var(--font-num); }
+
+  .totals {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+  .totals .cell {
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 14px 16px;
+  }
+  .totals .label { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+  .totals .value { font-family: var(--font-num); font-size: 22px; font-weight: 500; }
+
+  .agents {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin-bottom: 36px;
+  }
+  .agent-card {
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 18px 18px 14px;
+  }
+  .agent-card .top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 4px;
+  }
+  .agent-card .name { font-size: 15px; font-weight: 500; }
+  .agent-card .strategy { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+  .status {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+  .status.active { color: var(--gain); border-color: var(--gain); }
+  .status.paused { color: var(--paused); border-color: var(--paused); }
+
+  .equity-row { display: flex; align-items: baseline; gap: 10px; margin: 14px 0 2px; }
+  .equity-row .equity { font-family: var(--font-num); font-size: 26px; font-weight: 500; }
+  .equity-row .delta { font-family: var(--font-num); font-size: 13px; }
+  .delta.up { color: var(--gain); }
+  .delta.down { color: var(--loss); }
+  .delta.flat { color: var(--text-faint); }
+
+  .sparkline { width: 100%; height: 48px; display: block; margin: 10px 0 12px; }
+
+  .positions { font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--hairline); padding-top: 10px; }
+  .positions .row { display: flex; justify-content: space-between; padding: 2px 0; font-family: var(--font-num); }
+  .positions .empty { color: var(--text-faint); font-family: var(--font-ui); }
+
+  h2 { font-size: 15px; font-weight: 500; margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left;
+    font-weight: 500;
+    color: var(--text-faint);
+    font-size: 11px;
+    padding: 0 10px 8px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  tbody td { padding: 8px 10px; border-bottom: 1px solid var(--hairline); font-family: var(--font-num); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.side-buy { color: var(--gain); }
+  td.side-sell { color: var(--loss); }
+  td.agent-col { font-family: var(--font-ui); color: var(--text-dim); }
+
+  .empty-state { color: var(--text-faint); font-size: 13px; padding: 24px 0; }
+  .error-state { color: var(--loss); font-size: 13px; padding: 16px; background: var(--panel); border: 1px solid var(--hairline); border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Agent desk</h1>
+    <span class="meta" id="last-updated">loading…</span>
+  </header>
+
+  <div class="totals" id="totals"></div>
+
+  <div class="agents" id="agents">
+    <div class="empty-state">Loading agents…</div>
+  </div>
+
+  <h2>Recent trades</h2>
+  <table>
+    <thead>
+      <tr><th>Time (UTC)</th><th>Agent</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th></tr>
+    </thead>
+    <tbody id="trades-body">
+      <tr><td colspan="6" class="empty-state">Loading trades…</td></tr>
+    </tbody>
+  </table>
+
+</div>
+
+<script type="module">
+  import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+  // Fill these in with your Supabase project URL and the PUBLIC ANON key —
+  // never the service role key. The anon key can only read (see
+  // supabase_schema.sql's row-level security policies), so it's safe to
+  // ship in this client-side file even though anyone can view it.
+  const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
+  const SUPABASE_ANON_KEY = 'YOUR-ANON-PUBLIC-KEY';
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const STRATEGY_LABELS = {
+    asx_bluechip_steady: 'SMA crossover — ASX blue chips',
+    asx_smallcap_growth: 'RSI mean reversion — ASX small caps',
+    crypto_store_of_value: 'SMA crossover — BTC + gold token',
+  };
+
+  function fmtUsd(n) {
+    return '$' + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function drawSparkline(canvas, values) {
+    if (!values.length) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width = canvas.clientWidth * 2;
+    const h = canvas.height = canvas.clientHeight * 2;
+    ctx.scale(1, 1);
+    const min = Math.min(...values), max = Math.max(...values);
+    const range = max - min || 1;
+    const rising = values[values.length - 1] >= values[0];
+    ctx.strokeStyle = rising ? '#5fb98d' : '#d1685a';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    values.forEach((v, i) => {
+      const x = (i / (values.length - 1 || 1)) * w;
+      const y = h - ((v - min) / range) * (h - 8) - 4;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  async function load() {
+    const agentsEl = document.getElementById('agents');
+    const totalsEl = document.getElementById('totals');
+    const tradesBody = document.getElementById('trades-body');
+
+    try {
+      const [{ data: states, error: stateErr }, { data: trades, error: tradeErr }] = await Promise.all([
+        supabase.from('agent_state').select('*'),
+        supabase.from('trades').select('*').order('timestamp', { ascending: false }).limit(30),
+      ]);
+      if (stateErr) throw stateErr;
+      if (tradeErr) throw tradeErr;
+
+      document.getElementById('last-updated').textContent =
+        'refreshed ' + new Date().toLocaleTimeString();
+
+      // --- totals ---
+      const totalEquity = (states || []).reduce((sum, s) => sum + Number(s.cash), 0);
+      const activeCount = (states || []).filter(s => !s.paused).length;
+      totalsEl.innerHTML = `
+        <div class="cell"><div class="label">Agents</div><div class="value">${(states || []).length}</div></div>
+        <div class="cell"><div class="label">Active now</div><div class="value">${activeCount} / ${(states || []).length}</div></div>
+        <div class="cell"><div class="label">Combined cash</div><div class="value">${fmtUsd(totalEquity)}</div></div>
+      `;
+
+      // --- agent cards ---
+      if (!states || !states.length) {
+        agentsEl.innerHTML = '<div class="empty-state">No agents have reported in yet. Once the GitHub Actions workflow runs, they\'ll show up here.</div>';
+      } else {
+        agentsEl.innerHTML = '';
+        for (const s of states) {
+          const startBal = 10; // matches AgentConfig.starting_balance default
+          const positions = typeof s.positions === 'string' ? JSON.parse(s.positions) : (s.positions || {});
+          const agentTrades = (trades || []).filter(t => t.agent_name === s.agent_name).slice().reverse();
+          const sparkValues = [startBal, ...agentTrades.map(t => Number(t.cash_after))];
+          const cash = Number(s.cash);
+          const delta = cash - startBal;
+          const deltaClass = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+          const deltaSign = delta > 0 ? '+' : '';
+
+          const posRows = Object.entries(positions).filter(([, qty]) => Number(qty) > 0);
+
+          const card = document.createElement('div');
+          card.className = 'agent-card';
+          card.innerHTML = `
+            <div class="top">
+              <div>
+                <div class="name">${s.agent_name}</div>
+                <div class="strategy">${STRATEGY_LABELS[s.agent_name] || 'custom strategy'}</div>
+              </div>
+              <span class="status ${s.paused ? 'paused' : 'active'}">${s.paused ? 'paused' : 'active'}</span>
+            </div>
+            <div class="equity-row">
+              <span class="equity">${fmtUsd(cash)}</span>
+              <span class="delta ${deltaClass}">${deltaSign}${fmtUsd(delta)}</span>
+            </div>
+            <canvas class="sparkline"></canvas>
+            <div class="positions">
+              ${posRows.length
+                ? posRows.map(([sym, qty]) => `<div class="row"><span>${sym}</span><span>${Number(qty).toFixed(6)}</span></div>`).join('')
+                : '<div class="empty">No open position</div>'}
+            </div>
+          `;
+          agentsEl.appendChild(card);
+          drawSparkline(card.querySelector('.sparkline'), sparkValues);
+        }
+      }
+
+      // --- recent trades table ---
+      if (!trades || !trades.length) {
+        tradesBody.innerHTML = '<tr><td colspan="6" class="empty-state">No trades yet.</td></tr>';
+      } else {
+        tradesBody.innerHTML = trades.map(t => `
+          <tr>
+            <td>${new Date(t.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+            <td class="agent-col">${t.agent_name}</td>
+            <td>${t.symbol}</td>
+            <td class="side-${t.side.toLowerCase()}">${t.side}</td>
+            <td>${Number(t.qty).toFixed(6)}</td>
+            <td>${fmtUsd(t.price)}</td>
+          </tr>
+        `).join('');
+      }
+    } catch (err) {
+      agentsEl.innerHTML = `<div class="error-state">Couldn't load data: ${err.message}. Check that SUPABASE_URL and SUPABASE_ANON_KEY are filled in at the top of this file's script.</div>`;
+      totalsEl.innerHTML = '';
+      tradesBody.innerHTML = '';
+    }
+  }
+
+  load();
+  setInterval(load, 60000); // auto-refresh every minute while the tab is open
+</script>
+</body>
+</html>
