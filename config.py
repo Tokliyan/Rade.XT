@@ -24,7 +24,7 @@ class AgentConfig:
     data_source: str = "crypto"     # "crypto" (ccxt/Binance) or "stock" (yfinance, free ASX/US data)
     exchange_id: str = "binance"    # only used when data_source == "crypto"
     timeframe: str = "1h"           # candle size; for data_source="stock" this is passed to yfinance as interval
-    starting_balance: float = 10.0  # deliberately tiny — easy to actually watch it move
+    starting_balance: float = 100.0  # bigger numbers, same underlying math
     risk_per_trade: float = 0.02    # fraction of equity risked per trade
     stop_loss_pct: float = 0.03
     take_profit_pct: float = 0.06
@@ -45,6 +45,38 @@ API_SECRET: str = os.getenv("EXCHANGE_API_SECRET", "")
 # --- Live-trading specific settings (only relevant once PAPER_TRADING=False) ---
 LIVE_SANDBOX: bool = True
 MAX_LIVE_ORDER_USD: float = 20.0
+
+# --- Switchable risk profiles ---
+# Chosen per-agent from the dashboard (via the set-risk-profile Edge
+# Function), read fresh at the start of every tick. "balanced" is each
+# agent's own configured values above, left untouched. The other two
+# scale those values — including "aggressive", which concentrates into
+# a single symbol and risks much more per trade. One thing that does NOT
+# change with profile: a circuit breaker always exists. Aggressive gets a
+# higher ceiling (still real risk tolerance), never an unlimited one.
+RISK_PROFILES = {
+    "conservative": {
+        "risk_multiplier": 0.5,     # half the agent's normal risk_per_trade
+        "stop_loss_multiplier": 0.7,   # tighter stop
+        "take_profit_multiplier": 0.7,
+        "max_daily_loss_pct": 0.04,     # lower ceiling than default
+        "concentrate": False,
+    },
+    "balanced": {
+        "risk_multiplier": 1.0,
+        "stop_loss_multiplier": 1.0,
+        "take_profit_multiplier": 1.0,
+        "max_daily_loss_pct": None,     # use the agent's own configured value
+        "concentrate": False,
+    },
+    "aggressive": {
+        "risk_multiplier": 5.0,     # much bigger bets
+        "stop_loss_multiplier": 1.5,   # wider stop, more room to move
+        "take_profit_multiplier": 2.5,
+        "max_daily_loss_pct": 0.20,     # higher ceiling — still a real cap, not disabled
+        "concentrate": True,        # only trades the first symbol in the agent's list
+    },
+}
 
 
 def _build_agents() -> List[AgentConfig]:
