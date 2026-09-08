@@ -156,6 +156,54 @@ single live order regardless of what the risk manager calculates — a second,
 blunter safety net for a first real deployment. Raise it only once you've
 watched it behave correctly for a while.
 
+## Market conditions, historical ranges, and risk profiles
+
+Three additions on top of the original setup:
+
+- **Market conditions** — each agent card shows the live price and %
+  change for its symbols, pulled fresh every tick. For the ASX agents
+  this also notes when the market's closed, since outside ~10am-4pm AEST
+  weekdays you're just seeing the last traded price.
+- **Historical range** — instead of a fake "projected value," each card
+  shows the real spread of outcomes when this exact strategy was replayed
+  over actual past price data in overlapping 14-day windows (e.g. "-13%
+  to +11%, typical -1%, n=48 windows"). This is honest history, explicitly
+  not a prediction — a strategy that ranged wildly in the past will very
+  likely keep doing so, and a narrow historical range is not a promise
+  either. Computed by `backtest_stats.py`, refreshed weekly by its own
+  workflow (`.github/workflows/backtest-stats.yml`).
+- **Risk profile buttons** — Safe / Balanced / All-in on each card, live
+  from the dashboard. Safe halves the normal bet size and tightens stops.
+  All-in concentrates into a single symbol and risks far more per trade —
+  a real "bet it all" mode, not a cosmetic label. One thing that does NOT
+  change: a daily circuit breaker always exists, even in All-in mode (just
+  with a higher ceiling — 20% instead of the normal 8%). Read fresh at the
+  start of every tick, so a change takes effect within one run, no
+  redeploy needed.
+
+### Extra one-time setup for this part
+
+1. **Run the updated `supabase_schema.sql` again** — it's additive
+   (`if not exists` throughout), safe to re-run on a project that already
+   has the original tables. This adds `agent_settings`, `backtest_stats`,
+   and two new columns on `agent_state`.
+
+2. **Deploy the Edge Function** — this is what lets the public dashboard
+   safely change a risk profile without ever holding a write-capable key:
+   - Supabase Dashboard → **Edge Functions** → **Deploy a new function** → **Via Editor**
+   - Name it exactly `set-risk-profile`
+   - Paste in the contents of `supabase/functions/set-risk-profile/index.ts`, click Deploy
+   - Still on that function's page: **Manage** → **Secrets**, add:
+     - `SUPABASE_URL` — your project URL
+     - `SUPABASE_SERVICE_ROLE_KEY` — the same service role key from GitHub Secrets
+
+3. **Run `backtest_stats.py` once manually** so the historical-range panel
+   has something to show immediately, instead of waiting for Sunday:
+   repo → Actions → "Backtest Stats" → Run workflow.
+
+Nothing else changes — same GitHub Secrets, same dashboard URL, same
+30-minute schedule for the actual trading.
+
 ## The built-in safety rails
 
 - **Three separate switches gate real money** — `PAPER_TRADING`,
