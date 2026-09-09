@@ -71,3 +71,30 @@ class RsiMeanReversionStrategy:
         if last_rsi > self.overbought:
             return "SELL"
         return "HOLD"
+
+
+@dataclass
+class NewsSentimentStrategy:
+    """
+    Instead of reading price patterns, this reads recent news headlines
+    for news_symbol and asks Claude to classify overall sentiment,
+    mapping that straight to BUY/SELL/HOLD. Same generate_signal(df)
+    interface as every other strategy — df is accepted but not used for
+    the decision itself, only price/risk management still uses it
+    upstream in main.py.
+
+    This is the one strategy in the project that costs real money per
+    call (a Claude API request) — see README for the actual $/month
+    estimate and why it runs on its own, less-frequent schedule.
+    """
+    news_symbol: str   # yfinance-style ticker for news, e.g. "WES.AX" or "BTC-USD"
+    max_headlines: int = 8
+
+    def generate_signal(self, df) -> str:
+        from news_feed import fetch_recent_headlines, classify_sentiment
+        try:
+            headlines = fetch_recent_headlines(self.news_symbol, self.max_headlines)
+        except Exception as e:
+            print(f"[{self.news_symbol}] headline fetch failed, defaulting to HOLD: {e}")
+            return "HOLD"
+        return classify_sentiment(headlines)

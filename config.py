@@ -42,6 +42,10 @@ PAPER_TRADING: bool = True
 API_KEY: str = os.getenv("EXCHANGE_API_KEY", "")
 API_SECRET: str = os.getenv("EXCHANGE_API_SECRET", "")
 
+# Only needed by the 2 news-sentiment agents below — costs real money per
+# call (Claude API), unlike everything else in this project. See README.
+ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+
 # --- Live-trading specific settings (only relevant once PAPER_TRADING=False) ---
 LIVE_SANDBOX: bool = True
 MAX_LIVE_ORDER_USD: float = 20.0
@@ -81,7 +85,7 @@ RISK_PROFILES = {
 
 def _build_agents() -> List[AgentConfig]:
     # Imported here (not at module top) to avoid a circular import with strategy.py
-    from strategy import SmaCrossStrategy, RsiMeanReversionStrategy
+    from strategy import SmaCrossStrategy, RsiMeanReversionStrategy, NewsSentimentStrategy
 
     return [
         # Steady bucket: large, established ASX blue chips. Trend-following —
@@ -111,6 +115,25 @@ def _build_agents() -> List[AgentConfig]:
             name="crypto_store_of_value",
             symbols=["BTC/USDT", "PAXG/USDT"],
             strategy=SmaCrossStrategy(fast_period=10, slow_period=30),
+            data_source="crypto",
+            exchange_id="binance",
+            timeframe="1h",
+        ),
+        # News-sentiment experiment (COSTS MONEY — see README). Price and
+        # execution stay on the normal free rails; only the buy/sell
+        # decision itself comes from a Claude sentiment call on real
+        # headlines instead of a price-pattern rule.
+        AgentConfig(
+            name="news_sentiment_asx",
+            symbols=["WES.AX"],
+            strategy=NewsSentimentStrategy(news_symbol="WES.AX"),
+            data_source="stock",
+            timeframe="1h",
+        ),
+        AgentConfig(
+            name="news_sentiment_crypto",
+            symbols=["BTC/USDT"],
+            strategy=NewsSentimentStrategy(news_symbol="BTC-USD"),  # yfinance ticker for news only; price/execution still via Binance above
             data_source="crypto",
             exchange_id="binance",
             timeframe="1h",

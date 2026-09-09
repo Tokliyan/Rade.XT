@@ -38,7 +38,7 @@ GitHub Actions (free cron)
 | `supabase_schema.sql` | Run once in Supabase to create the two tables |
 | `dashboard.html` | Standalone check-in page — deploy on Netlify like leadlensai |
 
-## The 3 agents it ships with
+## The 5 agents it ships with
 
 Split across genuinely different asset classes, not just different coins:
 
@@ -52,6 +52,11 @@ Split across genuinely different asset classes, not just different coins:
 - **crypto_store_of_value** — SMA crossover on BTC/USDT, PAXG/USDT (a
   token backed 1:1 by physical gold) — the "hold value" bucket, both
   digital and physical, both on the same crypto pipeline as before.
+- **news_sentiment_asx** / **news_sentiment_crypto** — the odd ones out:
+  instead of a price-pattern rule, these ask Claude to read real recent
+  headlines (free, via yfinance's news feed) and classify sentiment as
+  the buy/sell signal. **This is the only part of the project that costs
+  real money** — see "News agents" below.
 
 Stock data comes free from Yahoo Finance via `yfinance` — no account, no
 API key. Two things worth knowing: it's an unofficial wrapper so it's
@@ -203,6 +208,28 @@ Three additions on top of the original setup:
 
 Nothing else changes — same GitHub Secrets, same dashboard URL, same
 30-minute schedule for the actual trading.
+
+## News agents — the paid part
+
+`news_sentiment_asx` and `news_sentiment_crypto` run on their own workflow
+(`.github/workflows/news-agents.yml`), separate from the free ones, every
+30 minutes — deliberately, so cost is easy to reason about on its own.
+
+**Real cost estimate, at current Claude Haiku 4.5 pricing ($1 input /
+$5 output per million tokens):** each sentiment check is roughly
+$0.0015. Two agents, every 30 minutes, is about **$4-5/month**. Checking
+more often doesn't meaningfully help — news doesn't publish every 5
+minutes any more than price patterns change that fast — so there's no
+reason to run these more frequently than the free agents.
+
+### Extra setup for this part
+
+1. Get an API key from [console.anthropic.com](https://console.anthropic.com)
+2. Add it as a GitHub secret named `ANTHROPIC_API_KEY`
+3. That's it — `news-agents.yml` already references that secret
+
+If the key is ever missing or a call fails for any reason, the strategy
+fails safe to HOLD rather than crashing the tick — see `news_feed.py`.
 
 ## The built-in safety rails
 
