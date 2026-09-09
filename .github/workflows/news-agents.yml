@@ -1,0 +1,38 @@
+name: News Agents
+
+# Deliberately separate from trading-bot.yml: these 2 agents cost real
+# money per run (a Claude API call each), so they're kept on their own,
+# less-frequent schedule where cost is easy to reason about and control
+# independently of the free agents. See README for the $/month estimate.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min — news doesn't publish every 5-15 min either
+  workflow_dispatch: {}
+
+jobs:
+  run-news-agents:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        agent: [news_sentiment_asx, news_sentiment_crypto]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run agent
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EXCHANGE_API_KEY: ${{ secrets.EXCHANGE_API_KEY }}
+          EXCHANGE_API_SECRET: ${{ secrets.EXCHANGE_API_SECRET }}
+          CONFIRM_LIVE_TRADING: ${{ secrets.CONFIRM_LIVE_TRADING }}
+        run: python main.py --agent ${{ matrix.agent }}
