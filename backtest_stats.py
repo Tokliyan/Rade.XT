@@ -41,7 +41,11 @@ MIN_BARS_PER_WINDOW = 30
 def fetch_history(agent, symbol) -> pd.DataFrame:
     if agent.data_source == "stock":
         return get_live_ohlcv_stock(symbol, interval=agent.timeframe, period="3mo")
-    return get_live_ohlcv(agent.exchange_id, symbol, agent.timeframe, limit=2000)
+    # Binance's actual per-request limit for 1h candles is 1000 (~41 days),
+    # not 2000 — asking for more than an exchange allows tends to fail the
+    # whole call rather than getting silently capped, which is the likely
+    # cause if this agent's historical range never populated.
+    return get_live_ohlcv(agent.exchange_id, symbol, agent.timeframe, limit=1000)
 
 
 def rolling_returns(df: pd.DataFrame, agent, symbol: str) -> list:
@@ -67,6 +71,10 @@ def rolling_returns(df: pd.DataFrame, agent, symbol: str) -> list:
 def main():
     store = SupabaseStateStore()
     for agent in AGENTS:
+        if not agent.backtestable:
+            print(f"[{agent.name}] not backtestable (reads live news, can't replay history) — skipping")
+            continue
+
         all_returns = []
         for symbol in agent.symbols:
             try:
