@@ -231,6 +231,41 @@ reason to run these more frequently than the free agents.
 If the key is ever missing or a call fails for any reason, the strategy
 fails safe to HOLD rather than crashing the tick — see `news_feed.py`.
 
+## Six-month closed-box replay
+
+A separate, standalone tool (`six_month_replay.py`) that replays each
+eligible agent's exact strategy against ~6 months of real historical
+price data, once per risk profile — 3 agents x 3 profiles = 9 real
+results from one run, in well under a minute.
+
+**Only 3 of the 5 agents are eligible** — `asx_bluechip_steady`,
+`asx_smallcap_growth`, `crypto_store_of_value`. The two news-sentiment
+agents can't be replayed this way: they read today's live news, and
+there's no way to "see" what a headline said 6 months ago, so testing
+them against old data would just repeat today's answer 6 months in a
+row — the same reason they're excluded from the weekly historical-range
+stats.
+
+**Completely separate from the live system, by design** — writes
+nothing to Supabase, doesn't touch live agent state, has zero effect on
+the real 15/30-minute schedule. It reuses the exact same `PaperBroker`
+and `RiskManager` as everything else, via the same `run_backtest()`
+function `backtest_stats.py` already calls — the only things different
+are the time span (6 months instead of 14 days) and testing all 3 risk
+profiles instead of one.
+
+Run it: repo → Actions → "Six Month Replay" → Run workflow. Results
+print in the log and also get saved as a downloadable artifact
+(`six_month_replay_results.csv`) at the bottom of that run's page.
+
+**What this actually tells you, and what it doesn't:** re-running the
+identical 6 months through the identical rule always gives the identical
+answer — there's no randomness to "run a few times" for the same window.
+What varies here is risk profile (genuinely different bet sizing and
+stops) and, if the underlying data goes back far enough, an optional
+second historical window. Real history, real math — but still one
+specific slice of the past, not a guarantee about the future.
+
 ## The built-in safety rails
 
 - **Three separate switches gate real money** — `PAPER_TRADING`,

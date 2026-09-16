@@ -9,7 +9,6 @@ get_synthetic_ohlcv() generates a fake-but-plausible price series so you
 can develop and backtest the strategy logic without hitting any API.
 """
 
-import time
 import numpy as np
 import pandas as pd
 
@@ -21,6 +20,45 @@ def get_live_ohlcv(exchange_id: str, symbol: str, timeframe: str, limit: int = 5
     exchange = exchange_class({"enableRateLimit": True})
     raw = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    return df.set_index("timestamp")
+
+
+def get_live_ohlcv_paginated(exchange_id: str, symbol: str, timeframe: str, days: int) -> pd.DataFrame:
+    """
+    Stitches together `days` worth of history from an exchange whose
+    single-request limit is smaller than that. Binance caps one call at
+    1000 candles — ~41 days at 1h — so 6 months (~180 days) needs about
+    5 chained calls, each picking up where the last left off via ccxt's
+    `since` parameter. Used for the 6-month replay tool; the regular live
+    tick and weekly backtest stats don't need this much history.
+    """
+    import ccxt
+
+    exchange_class = getattr(ccxt, exchange_id)
+    exchange = exchange_class({"enableRateLimit": True})
+
+    timeframe_ms = exchange.parse_timeframe(timeframe) * 1000
+    since = exchange.milliseconds() - days * 24 * 60 * 60 * 1000
+    now = exchange.milliseconds()
+    all_candles = []
+    max_calls = 20  # safety cap, not a tuning knob — 20x1000 candles at 1h is ~2.7 years, far more than ever needed
+
+    for _ in range(max_calls):
+        batch = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=1000)
+        if not batch:
+            break
+        all_candles.extend(batch)
+        last_ts = batch[-1][0]
+        since = last_ts + timeframe_ms
+        if since >= now or len(batch) < 1000:
+            break
+
+    if not all_candles:
+        raise ValueError(f"No candles returned for {symbol} on {exchange_id} — check the symbol is correct.")
+
+    df = pd.DataFrame(all_candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df = df.drop_duplicates(subset="timestamp").sort_values("timestamp").reset_index(drop=True)
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df.set_index("timestamp")
 

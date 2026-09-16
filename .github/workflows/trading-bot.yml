@@ -2,8 +2,14 @@ name: Trading Bot
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
-  workflow_dispatch: {}
+    # Every 15 minutes — 5 min is GitHub's actual floor, but the
+    # strategies read 1-hour candles, so checking faster than that never
+    # produces a NEW signal. 15 min is the sweet spot: meaningfully
+    # faster stop-loss/take-profit reaction on an open position (that
+    # part checks live price, not just the candle), without burning
+    # runs on redundant re-checks of the same hourly data.
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}   # adds a manual "Run workflow" button in the Actions tab
 
 jobs:
   run-agents:
@@ -11,7 +17,7 @@ jobs:
     strategy:
       matrix:
         agent: [asx_bluechip_steady, asx_smallcap_growth, crypto_store_of_value]
-      fail-fast: false
+      fail-fast: false   # one agent erroring shouldn't cancel the others
     steps:
       - uses: actions/checkout@v4
 

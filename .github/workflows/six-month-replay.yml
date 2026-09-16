@@ -1,0 +1,30 @@
+name: Six Month Replay
+
+# Manual only, on purpose — this is a what-if tool you run whenever you're
+# curious, not something that needs to run on a schedule. It has zero
+# effect on the live agents and writes nothing to Supabase.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the 6-month replay
+        run: python six_month_replay.py
+
+      - name: Upload results as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: six-month-replay-results
+          path: six_month_replay_results.csv
