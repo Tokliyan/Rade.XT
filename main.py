@@ -23,7 +23,7 @@ import sys
 from datetime import datetime, timezone
 
 from config import AGENTS_BY_NAME, PAPER_TRADING, LIVE_SANDBOX, MAX_LIVE_ORDER_USD, API_KEY, API_SECRET, RISK_PROFILES
-from data_feed import get_live_ohlcv, get_live_ohlcv_stock
+from data_feed import get_live_ohlcv, get_live_ohlcv_stock, candles_for_chart
 from risk_manager import RiskManager
 from broker import PaperBroker, build_live_broker
 from state_store import SupabaseStateStore
@@ -111,7 +111,12 @@ def run_agent(agent_name: str) -> int:
         # without pretending to predict anything.
         first_price = df["close"].iloc[0]
         change_pct = ((price / first_price) - 1) * 100 if first_price else 0.0
-        market_snapshot[symbol] = {"price": round(float(price), 6), "change_pct": round(change_pct, 2)}
+        market_snapshot[symbol] = {
+            "price": round(float(price), 6),
+            "change_pct": round(change_pct, 2),
+            # last ~48 hourly candles for the dashboard's candlestick chart
+            "candles": candles_for_chart(df, 48),
+        }
 
         if agent.data_source == "stock":
             market_note = "ASX trades ~10am-4pm AEST weekdays — outside those hours this is just the last traded price."

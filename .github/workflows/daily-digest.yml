@@ -1,0 +1,36 @@
+name: Daily Digest
+
+# Once a day: refresh company fundamentals (free), then write the AI digest
+# (one Claude Haiku call — a fraction of a cent). Both steps fail soft, so a
+# Yahoo or API hiccup never breaks the main trading workflows.
+
+on:
+  schedule:
+    - cron: "30 21 * * *"   # 21:30 UTC ≈ 7:30-8:30am Sydney, before the ASX opens
+  workflow_dispatch: {}
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh fundamentals
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python fundamentals.py
+
+      - name: Write daily digest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python daily_digest.py

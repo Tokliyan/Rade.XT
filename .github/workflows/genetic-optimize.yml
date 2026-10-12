@@ -1,0 +1,29 @@
+name: Genetic Optimize
+
+# Manual only — a what-if research tool, not part of the live pipeline.
+# Never touches Supabase, never affects the live agents.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run genetic parameter search (train/test split)
+        run: python genetic_optimize.py
+
+      - name: Upload results as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: genetic-optimize-results
+          path: genetic_optimize_results.csv

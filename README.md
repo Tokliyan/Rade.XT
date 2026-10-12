@@ -34,6 +34,7 @@ GitHub Actions (free cron)
 | `data_feed.py` | Live candles via ccxt, or synthetic data for offline testing |
 | `backtester.py` / `demo_backtest.py` | Replay a strategy over historical (or synthetic) data |
 | `main.py` | The single-tick runner GitHub Actions calls on a schedule |
+| `daily_digest.py`, `fundamentals.py` | Daily AI digest + company numbers for the dashboard (v3) |
 | `.github/workflows/trading-bot.yml` | The free scheduler — runs all 3 agents every 30 min |
 | `supabase_schema.sql` | Run once in Supabase to create the two tables |
 | `dashboard.html` | Standalone check-in page — deploy on Netlify like leadlensai |
@@ -265,6 +266,16 @@ What varies here is risk profile (genuinely different bet sizing and
 stops) and, if the underlying data goes back far enough, an optional
 second historical window. Real history, real math — but still one
 specific slice of the past, not a guarantee about the future.
+
+## Candlestick charts, daily digest and fundamentals (v3)
+
+Three dashboard additions, all display-only — none of them changes what the bots trade.
+
+- **Candlestick charts** — every tick, `main.py` saves the last 48 hourly candles per symbol inside `agent_state.market_snapshot`, and the dashboard draws them (green = closed up, red = closed down; a dashed line marks your entry price while a position is open). No new table.
+- **AI daily digest** — `daily_digest.py` runs once a day (`daily-digest.yml`), collects equity and last-24h trades from Supabase and has Claude Haiku write 3-5 plain sentences about them. It is told to use only the supplied numbers and give no advice. No API key or an API error → a plain templated summary is saved instead. Cost: a fraction of a cent per day.
+- **Fundamentals** — `fundamentals.py` (same daily workflow) stores P/E, market cap, dividend yield, margins, beta and the 52-week range for the ASX symbols, shown in a collapsible "Fundamentals" row on each card. Free, from Yahoo Finance via yfinance.
+
+One-time setup: run the "v3 additions" block at the bottom of `supabase_schema.sql` in the Supabase SQL editor (it creates `daily_digests` and `fundamentals`; safe to re-run), add `.github/workflows/daily-digest.yml`, then run the **Daily Digest** workflow once from the Actions tab. Until the tables exist the dashboard simply hides those two panels. Charts appear after the next trading tick.
 
 ## The built-in safety rails
 

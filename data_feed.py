@@ -106,3 +106,26 @@ def get_synthetic_ohlcv(symbol: str, periods: int = 1000, seed: int | None = Non
         "open": open_, "high": high, "low": low, "close": price, "volume": volume
     }, index=idx)
     return df
+
+
+def candles_for_chart(df: pd.DataFrame, n: int = 48) -> list:
+    """
+    Compact the last `n` candles into [unix_seconds, open, high, low, close]
+    rows so they can ride along inside agent_state.market_snapshot and be
+    drawn as candlesticks on the dashboard. Pure formatting — never raises
+    on odd data, just returns whatever clean rows it can.
+    """
+    rows = []
+    try:
+        tail = df.tail(n)
+        for ts, r in tail.iterrows():
+            t = pd.Timestamp(ts)
+            if t.tzinfo is None:
+                t = t.tz_localize("UTC")
+            o, h, l, c = (float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
+            if any(pd.isna(x) for x in (o, h, l, c)):
+                continue
+            rows.append([int(t.timestamp()), round(o, 6), round(h, 6), round(l, 6), round(c, 6)])
+    except Exception:
+        return []
+    return rows

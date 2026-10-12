@@ -133,6 +133,26 @@
   .profile-btn.active { border-color: var(--gain); color: var(--gain); background: rgba(95,185,141,0.08); }
   .profile-btn:disabled { opacity: 0.5; cursor: default; }
 
+
+  .digest { background: var(--panel); border: 1px solid var(--hairline); border-left: 3px solid var(--gain); border-radius: 6px; padding: 14px 16px; margin-bottom: 28px; }
+  .digest .label { font-size: 11px; color: var(--text-faint); margin-bottom: 6px; font-family: var(--font-num); }
+  .digest .text { font-size: 14px; line-height: 1.55; color: var(--text); }
+
+  .chart-box { border-top: 1px solid var(--hairline); padding-top: 10px; margin-top: 10px; }
+  .chart-tabs { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+  .chart-tab { font-family: var(--font-num); font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--hairline-strong); background: transparent; color: var(--text-dim); cursor: pointer; }
+  .chart-tab.active { border-color: var(--gain); color: var(--gain); }
+  canvas.candles { width: 100%; height: 130px; display: block; }
+  .chart-caption { font-size: 11px; color: var(--text-faint); margin-top: 4px; }
+
+  details.fund { border-top: 1px solid var(--hairline); padding-top: 10px; margin-top: 10px; font-size: 12px; }
+  details.fund summary { color: var(--text-dim); cursor: pointer; }
+  details.fund .sym { color: var(--text); font-family: var(--font-num); margin: 10px 0 4px; }
+  details.fund .row { display: flex; justify-content: space-between; padding: 2px 0; font-family: var(--font-num); color: var(--text-dim); }
+  details.fund .bar { height: 4px; background: var(--hairline); border-radius: 2px; margin: 4px 0 2px; position: relative; }
+  details.fund .bar i { position: absolute; top: -3px; width: 2px; height: 10px; background: var(--text); }
+  details.fund .caption { color: var(--text-faint); font-size: 11px; margin-top: 6px; }
+
   h2 { font-size: 15px; font-weight: 500; margin: 0 0 14px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   thead th {
@@ -160,6 +180,8 @@
     <h1>Agent desk</h1>
     <span class="meta" id="last-updated">loading…</span>
   </header>
+
+  <div id="digest"></div>
 
   <div class="totals" id="totals"></div>
 
@@ -246,6 +268,124 @@
     ctx.stroke();
   }
 
+
+  function esc(str) {
+    return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function fmtPrice(n) {
+    const v = Number(n);
+    const d = v >= 100 ? 2 : v >= 1 ? 3 : 5;
+    return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: d });
+  }
+
+  function fmtBig(n) {
+    const v = Number(n);
+    if (v >= 1e12) return (v / 1e12).toFixed(2) + 'T';
+    if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    return v.toLocaleString();
+  }
+
+  // Candles arrive as [unix_seconds, open, high, low, close] rows.
+  function drawCandles(canvas, candles, entryPrice) {
+    const dpr = window.devicePixelRatio || 1;
+    const cw = canvas.clientWidth, ch = canvas.clientHeight;
+    if (!cw || !ch) return;
+    canvas.width = cw * dpr;
+    canvas.height = ch * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, cw, ch);
+    if (!candles || !candles.length) return;
+
+    const padR = 58, padT = 6, padB = 6;
+    const plotW = cw - padR, plotH = ch - padT - padB;
+    let lo = Math.min(...candles.map(c => c[3])), hi = Math.max(...candles.map(c => c[2]));
+    if (entryPrice) { lo = Math.min(lo, entryPrice); hi = Math.max(hi, entryPrice); }
+    const span = (hi - lo) || (hi * 0.01) || 1;
+    lo -= span * 0.04; hi += span * 0.04;
+    const y = v => padT + (1 - (v - lo) / (hi - lo)) * plotH;
+    const slot = plotW / candles.length;
+    const bodyW = Math.max(1, Math.min(10, slot * 0.65));
+
+    // light grid + price labels
+    ctx.font = '10px "IBM Plex Mono", monospace';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#656b7a';
+    ctx.strokeStyle = '#2b2f3a';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 4; i++) {
+      const v = lo + (hi - lo) * (i / 3);
+      const yy = Math.round(y(v)) + 0.5;
+      ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(plotW, yy); ctx.stroke();
+      ctx.fillText(v >= 1000 ? Math.round(v).toLocaleString() : fmtPrice(v), plotW + 4, yy);
+    }
+
+    candles.forEach((c, i) => {
+      const [, o, h, l, cl] = c;
+      const x = i * slot + slot / 2;
+      const up = cl >= o;
+      ctx.strokeStyle = ctx.fillStyle = up ? '#5fb98d' : '#d1685a';
+      ctx.beginPath(); ctx.moveTo(x, y(h)); ctx.lineTo(x, y(l)); ctx.stroke();
+      const top = y(Math.max(o, cl)), bh = Math.max(1, Math.abs(y(o) - y(cl)));
+      ctx.fillRect(x - bodyW / 2, top, bodyW, bh);
+    });
+
+    if (entryPrice) {
+      const yy = Math.round(y(entryPrice)) + 0.5;
+      ctx.save();
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = '#d1a24a';
+      ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(plotW, yy); ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = '#d1a24a';
+      ctx.fillText('entry ' + fmtPrice(entryPrice), 4, Math.min(ch - 8, Math.max(8, yy - 8)));
+    }
+  }
+
+  function fundamentalsHtml(symbols, fundBySymbol) {
+    const blocks = symbols.filter(sym => fundBySymbol[sym]).map(sym => {
+      const f = fundBySymbol[sym];
+      const rows = [];
+      if (f.name) rows.push(['Company', esc(f.name) + (f.sector ? ' · ' + esc(f.sector) : '')]);
+      if (f.market_cap != null) rows.push(['Market cap', '$' + fmtBig(f.market_cap)]);
+      if (f.pe_trailing != null) rows.push(['P/E (trailing)', Number(f.pe_trailing).toFixed(1)]);
+      if (f.pe_forward != null) rows.push(['P/E (forward)', Number(f.pe_forward).toFixed(1)]);
+      if (f.eps != null) rows.push(['EPS', Number(f.eps).toFixed(2)]);
+      if (f.dividend_yield_pct != null) rows.push(['Dividend yield', Number(f.dividend_yield_pct).toFixed(2) + '%']);
+      if (f.profit_margin_pct != null) rows.push(['Profit margin', Number(f.profit_margin_pct).toFixed(1) + '%']);
+      if (f.beta != null) rows.push(['Beta', Number(f.beta).toFixed(2)]);
+      let range = '';
+      if (f.low_52w != null && f.high_52w != null) {
+        const pos = f.pos_52w != null ? Math.round(f.pos_52w * 100) : null;
+        range = `<div class="row"><span>52-week range</span><span>${fmtPrice(f.low_52w)} – ${fmtPrice(f.high_52w)}</span></div>
+                 ${pos != null ? `<div class="bar"><i style="left:${pos}%"></i></div>` : ''}`;
+      }
+      return `<div class="sym">${esc(sym)}</div>` +
+        rows.map(([k, v]) => `<div class="row"><span>${k}</span><span>${v}</span></div>`).join('') + range;
+    });
+    if (!blocks.length) return '';
+    return `<details class="fund"><summary>Fundamentals</summary>${blocks.join('')}
+      <div class="caption">Company numbers from Yahoo Finance, refreshed daily. For context only — the bots don't use them.</div></details>`;
+  }
+
+  // Extra panels are optional: if their tables aren't created yet (or a
+  // request fails) the dashboard still works, just without them.
+  async function loadOptional(table, build) {
+    try {
+      const { data, error } = await build(supabase.from(table));
+      if (error) throw error;
+      return data || [];
+    } catch (e) {
+      console.warn('optional panel skipped:', table, e.message || e);
+      return [];
+    }
+  }
+
+  let chartRedraws = [];
+  window.addEventListener('resize', () => chartRedraws.forEach(f => f()));
+
   async function load() {
     const agentsEl = document.getElementById('agents');
     const totalsEl = document.getElementById('totals');
@@ -263,6 +403,17 @@
       if (tradeErr) throw tradeErr;
       if (settingsErr) throw settingsErr;
       if (statsErr) throw statsErr;
+
+      const [digests, fundRows] = await Promise.all([
+        loadOptional('daily_digests', t => t.select('*').order('day', { ascending: false }).limit(1)),
+        loadOptional('fundamentals', t => t.select('*')),
+      ]);
+      const fundBySymbol = Object.fromEntries(fundRows.map(r => [r.symbol, typeof r.data === 'string' ? JSON.parse(r.data) : (r.data || {})]));
+
+      const digestEl = document.getElementById('digest');
+      digestEl.innerHTML = digests.length
+        ? `<div class="digest"><div class="label">DAILY DIGEST · ${esc(digests[0].day)}${digests[0].source === 'claude' ? ' · written by Claude' : ''}</div><div class="text">${esc(digests[0].summary)}</div></div>`
+        : '';
 
       const settingsByAgent = Object.fromEntries((settings || []).map(s => [s.agent_name, s]));
       const statsByAgent = Object.fromEntries((stats || []).map(s => [s.agent_name, s]));
@@ -295,6 +446,7 @@
         agentsEl.innerHTML = '<div class="empty-state">No agents have reported in yet. Once the GitHub Actions workflow runs, they\'ll show up here.</div>';
       } else {
         agentsEl.innerHTML = '';
+        chartRedraws = [];
         for (const s of states) {
           const startBal = 100; // matches AgentConfig.starting_balance default
           const positions = typeof s.positions === 'string' ? JSON.parse(s.positions) : (s.positions || {});
@@ -318,6 +470,8 @@
           const posRows = Object.entries(positions).filter(([, qty]) => Number(qty) > 0);
 
           const marketRows = Object.entries(marketSnapshot);
+          const chartSyms = Object.keys(marketSnapshot).filter(sym => Array.isArray(marketSnapshot[sym].candles) && marketSnapshot[sym].candles.length > 1);
+          const entryPrices = typeof s.entry_prices === 'string' ? JSON.parse(s.entry_prices) : (s.entry_prices || {});
 
           const stat = statsByAgent[s.agent_name];
           const currentProfile = (settingsByAgent[s.agent_name] && settingsByAgent[s.agent_name].risk_profile) || 'balanced';
@@ -337,6 +491,11 @@
               <span class="delta ${deltaClass}">${deltaSign}${fmtUsd(delta)}</span>
             </div>
             <canvas class="sparkline"></canvas>
+            ${chartSyms.length ? `<div class="chart-box">
+              <div class="chart-tabs"></div>
+              <canvas class="candles"></canvas>
+              <div class="chart-caption">Hourly candles, last ${marketSnapshot[chartSyms[0]].candles.length} bars. Green = closed up, red = closed down.</div>
+            </div>` : ''}
             <div class="positions">
               ${posRows.length
                 ? posRows.map(([sym, qty]) => {
@@ -351,6 +510,7 @@
                 : '<div class="empty">No market data yet</div>'}
               ${s.market_note ? `<div class="note">${s.market_note}</div>` : ''}
             </div>
+            ${fundamentalsHtml(Object.keys(marketSnapshot), fundBySymbol)}
             <div class="hist-range">
               <div class="label">Historical range (${stat ? stat.window_days : 14}-day windows)</div>
               ${NOT_BACKTESTABLE.has(s.agent_name)
@@ -367,6 +527,30 @@
           `;
           agentsEl.appendChild(card);
           drawSparkline(card.querySelector('.sparkline'), sparkValues);
+
+          if (chartSyms.length) {
+            const canvas = card.querySelector('canvas.candles');
+            const tabs = card.querySelector('.chart-tabs');
+            const show = sym => {
+              Array.from(tabs.children).forEach(b => b.classList.toggle('active', b.dataset.sym === sym));
+              const held = Number(positions[sym] || 0) > 0;
+              drawCandles(canvas, marketSnapshot[sym].candles, held ? Number(entryPrices[sym]) || null : null);
+            };
+            chartSyms.forEach(sym => {
+              const b = document.createElement('button');
+              b.className = 'chart-tab';
+              b.dataset.sym = sym;
+              b.textContent = sym;
+              b.onclick = () => show(sym);
+              tabs.appendChild(b);
+            });
+            let current = chartSyms[0];
+            const showTracked = sym => { current = sym; show(sym); };
+            Array.from(tabs.children).forEach(b => { b.onclick = () => showTracked(b.dataset.sym); });
+            show(current);
+            chartRedraws.push(() => show(current));
+            requestAnimationFrame(() => show(current)); // repaint once layout has settled
+          }
 
           const btnGroup = card.querySelector('.profile-btns');
           PROFILES.forEach(p => {
@@ -398,6 +582,7 @@
       agentsEl.innerHTML = `<div class="error-state">Couldn't load data: ${err.message}. Check that SUPABASE_URL and SUPABASE_ANON_KEY are filled in at the top of this file's script.</div>`;
       totalsEl.innerHTML = '';
       tradesBody.innerHTML = '';
+      document.getElementById('digest').innerHTML = '';
     }
   }
 

@@ -76,3 +76,26 @@ create table if not exists backtest_stats (
 alter table backtest_stats enable row level security;
 drop policy if exists "public read backtest_stats" on backtest_stats;
 create policy "public read backtest_stats" on backtest_stats for select using (true);
+
+-- v3 additions: AI daily digest + fundamentals panel (candlestick charts
+-- need no new tables — candles ride inside agent_state.market_snapshot).
+
+create table if not exists daily_digests (
+  day date primary key,
+  summary text not null,
+  source text not null default 'template',
+  stats jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+alter table daily_digests enable row level security;
+drop policy if exists "public read daily_digests" on daily_digests;
+create policy "public read daily_digests" on daily_digests for select using (true);
+
+create table if not exists fundamentals (
+  symbol text primary key,
+  data jsonb not null default '{}',
+  updated_at timestamptz not null default now()
+);
+alter table fundamentals enable row level security;
+drop policy if exists "public read fundamentals" on fundamentals;
+create policy "public read fundamentals" on fundamentals for select using (true);
