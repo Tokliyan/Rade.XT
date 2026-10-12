@@ -99,3 +99,21 @@ create table if not exists fundamentals (
 alter table fundamentals enable row level security;
 drop policy if exists "public read fundamentals" on fundamentals;
 create policy "public read fundamentals" on fundamentals for select using (true);
+
+-- Night Run additions: strategy parameters the nightly refine step has
+-- auto-applied to the PAPER agents. main.py reads this every tick; delete an
+-- agent's row to put it straight back on its config.py defaults.
+-- previous_params is kept so any change can be rolled back by hand.
+
+create table if not exists agent_overrides (
+  agent_name text primary key,
+  family text not null,
+  params jsonb not null,
+  previous_params jsonb,
+  reason text,
+  metrics jsonb not null default '{}',
+  applied_at timestamptz not null default now()
+);
+alter table agent_overrides enable row level security;
+drop policy if exists "public read agent_overrides" on agent_overrides;
+create policy "public read agent_overrides" on agent_overrides for select using (true);

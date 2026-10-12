@@ -175,11 +175,13 @@ def evaluate(agent, symbol_data: dict, family, params) -> dict:
     }
 
 
-def run_genetic_search(agent, train_data: dict, family, rng) -> dict:
+def run_genetic_search(agent, train_data: dict, family, rng, generations: int = GENERATIONS, seed_params=None) -> dict:
     population = [family["random"](rng) for _ in range(POPULATION_SIZE)]
+    if seed_params is not None:
+        population[0] = dict(seed_params)  # current params compete too, so "no change" can win
     best_overall = None
 
-    for gen in range(GENERATIONS):
+    for gen in range(generations):
         scored = [(evaluate(agent, train_data, family, p), p) for p in population]
         scored.sort(key=lambda x: x[0]["fitness"], reverse=True)
 
@@ -187,7 +189,7 @@ def run_genetic_search(agent, train_data: dict, family, rng) -> dict:
         if best_overall is None or gen_best_result["fitness"] > best_overall["result"]["fitness"]:
             best_overall = {"params": gen_best_params, "result": gen_best_result}
 
-        print(f"    gen {gen+1:2d}/{GENERATIONS}: best fitness={gen_best_result['fitness']:+.2f} "
+        print(f"    gen {gen+1:2d}/{generations}: best fitness={gen_best_result['fitness']:+.2f} "
               f"(return={gen_best_result['return_pct']:+.2f}%, dd={gen_best_result['max_drawdown_pct']:.2f}%) "
               f"params={gen_best_params}")
 

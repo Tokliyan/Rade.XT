@@ -93,3 +93,44 @@ class SupabaseStateStore:
             "cash_after": cash_after,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }).execute()
+
+    # --- Nightly refine: per-agent strategy parameter overrides ---
+    # Written only by nightly_review.py (service role key, GitHub Actions),
+    # read by main.py every tick. See strategy_params.py for the bounds every
+    # override is checked against before use.
+
+    def get_strategy_override(self, agent_name: str) -> Optional[Dict]:
+        """None if there's no override OR the table doesn't exist yet — the
+        agent then just trades its config.py defaults, same as before."""
+        try:
+            res = self.client.table("agent_overrides").select("*").eq("agent_name", agent_name).execute()
+        except Exception as e:
+            print(f"[{agent_name}] strategy override unavailable ({e}) — using config defaults")
+            return None
+        if not res.data:
+            return None
+        row = res.data[0]
+        params = row.get("params")
+        if isinstance(params, str):
+            params = json.loads(params)
+        return {**row, "params": params}
+
+    def save_strategy_override(self, agent_name: str, family: str, params: Dict,
+                               previous_params: Optional[Dict], reason: str, metrics: Dict):
+        self.client.table("agent_overrides").upsert({
+            "agent_name": agent_name,
+            "family": family,
+            "params": params,
+            "previous_params": previous_params,
+            "reason": reason,
+            "metrics": metrics,
+            "applied_at": datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="agent_name").execute()
+
+    def trades_since(self, iso_ts: str):
+        res = self.client.table("trades").select("*").gte("timestamp", iso_ts).order("timestamp").execute()
+        return res.data or []
+
+    def all_agent_state(self):
+        res = self.client.table("agent_state").select("*").execute()
+        return res.data or []

@@ -27,6 +27,7 @@ from data_feed import get_live_ohlcv, get_live_ohlcv_stock, candles_for_chart
 from risk_manager import RiskManager
 from broker import PaperBroker, build_live_broker
 from state_store import SupabaseStateStore
+from strategy_params import strategy_with_override
 
 
 def run_agent(agent_name: str) -> int:
@@ -51,6 +52,14 @@ def run_agent(agent_name: str) -> int:
     symbols_to_trade = [agent.symbols[0]] if profile["concentrate"] else agent.symbols
 
     print(f"[{agent.name}] risk profile: {profile_name} (symbols this tick: {symbols_to_trade})")
+
+    # --- Strategy parameters: nightly-refined override if one is valid, else config.py ---
+    # Paper only: the nightly refine step never writes overrides while live
+    # trading is on, and this refuses to use one in live mode either.
+    override = None if live else store.get_strategy_override(agent.name)
+    strategy, strategy_source = strategy_with_override(agent.strategy, override)
+    if strategy_source == "override":
+        print(f"[{agent.name}] strategy params: nightly override {override['params']}")
 
     if live:
         if agent.data_source != "crypto":
@@ -145,7 +154,7 @@ def run_agent(agent_name: str) -> int:
                 except Exception as e:
                     print(f"[{agent.name}/{symbol}] SELL (stop/target) failed: {e}", file=sys.stderr)
 
-        signal = agent.strategy.generate_signal(df)
+        signal = strategy.generate_signal(df)
 
         if signal == "BUY" and held == 0:
             equity = live_broker.equity(symbols_to_trade) if live else paper_broker.equity(last_prices)

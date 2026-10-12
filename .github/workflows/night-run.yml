@@ -1,0 +1,39 @@
+name: Night Run
+
+# Rade.XT's part of the Night Run: tests -> data -> refine -> report to JARVIS.
+# Runs before the other overnight jobs so the 6am morning check can include it.
+# Refine can auto-apply new strategy settings to the PAPER agents only — see
+# nightly_review.py for every gate it has to pass first.
+
+on:
+  schedule:
+    - cron: "30 17 * * *"   # 17:30 UTC = 4:30am Sydney (AEDT), 3:30am in winter
+  workflow_dispatch: {}
+
+jobs:
+  night-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+
+      - name: Tests
+        id: tests
+        continue-on-error: true   # a failing test is reported to JARVIS, not hidden
+        run: python -m pytest -q tests
+
+      - name: Data + refine + report
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          NIGHT_RUN_TOKEN: ${{ secrets.NIGHT_RUN_TOKEN }}
+          JARVIS_URL: https://jarvis-aio.onrender.com
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+        run: python nightly_review.py

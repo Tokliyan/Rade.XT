@@ -277,6 +277,19 @@ Three dashboard additions, all display-only — none of them changes what the bo
 
 One-time setup: run the "v3 additions" block at the bottom of `supabase_schema.sql` in the Supabase SQL editor (it creates `daily_digests` and `fundamentals`; safe to re-run), add `.github/workflows/daily-digest.yml`, then run the **Daily Digest** workflow once from the Actions tab. Until the tables exist the dashboard simply hides those two panels. Charts appear after the next trading tick.
 
+## Night Run — nightly tests, review and auto-refine
+
+`.github/workflows/night-run.yml` runs `nightly_review.py` at 4:30am Sydney:
+
+1. **Tests**: `pytest tests/` (core trading logic + the refine gate). A failure is reported, not hidden.
+2. **Data**: last 24h of trades and every agent's equity, open positions, circuit-breaker state, and whether its 15-minute ticks are still landing.
+3. **Refine**: for the 3 price-pattern agents, an 8-generation genetic search on ~4 months, checked once on the ~2 months it never saw. New settings are **auto-applied to the paper agents** only if they pass every gate: inside safe bounds, at least 3 trades on unseen data, train/test gap under 10 points, at least +1.0 better than the current settings on unseen data, and no change to that agent in the last 3 days. They're written to `agent_overrides` (with `previous_params`), which `main.py` reads every tick. Never applied while `PAPER_TRADING` is False; the news agents are never touched.
+4. **Report**: POSTs a summary to JARVIS → Daily Status → Night run.
+
+To roll an agent back to its `config.py` settings: delete its row in `agent_overrides`.
+
+One-time setup: run the `agent_overrides` block at the end of `supabase_schema.sql`, and add a `NIGHT_RUN_TOKEN` repository secret (same value as in JARVIS's Render environment).
+
 ## The built-in safety rails
 
 - **Three separate switches gate real money** — `PAPER_TRADING`,
