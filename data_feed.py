@@ -13,18 +13,67 @@ import numpy as np
 import pandas as pd
 
 
+# GitHub's hosted runners sit in the US, where Binance answers HTTP 451
+# ("restricted location") and refuses every request. When the configured
+# exchange fails we fall back to exchanges that serve US-hosted callers.
+# Paper trading only: prices differ from Binance by a fraction of a percent,
+# which is fine for paper fills. The live broker (broker.py) is NOT touched
+# by this; it always uses the exchange configured on the agent.
+FALLBACK_EXCHANGES = ["kraken", "coinbase"]
+
+
+def _source_candidates(exchange_id: str, symbol: str):
+    """(exchange, symbol) pairs to try in order, de-duplicated. A USDT pair
+    is also tried as the USD pair, since some fallback exchanges only list USD."""
+    seen, out = set(), []
+    symbols = [symbol]
+    if symbol.endswith("/USDT"):
+        symbols.append(symbol.replace("/USDT", "/USD"))
+    for ex in [exchange_id] + FALLBACK_EXCHANGES:
+        for sym in symbols:
+            if (ex, sym) not in seen:
+                seen.add((ex, sym))
+                out.append((ex, sym))
+    return out
+
+
+def _with_fallback(exchange_id: str, symbol: str, fetch):
+    """Calls fetch(exchange_id, symbol) for each candidate until one works.
+    Raises one error naming every attempt if none do."""
+    errors = []
+    for ex, sym in _source_candidates(exchange_id, symbol):
+        try:
+            result = fetch(ex, sym)
+            if (ex, sym) != (exchange_id, symbol):
+                print(f"[data_feed] {symbol}: {exchange_id} unavailable, using {ex} {sym}")
+            return result
+        except Exception as e:  # network, geo-block, bad symbol: try the next source
+            errors.append(f"{ex} {sym}: {str(e).splitlines()[0][:120] if str(e) else type(e).__name__}")
+    raise RuntimeError("all data sources failed -> " + " | ".join(errors))
+
+
 def get_live_ohlcv(exchange_id: str, symbol: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
+    return _with_fallback(exchange_id, symbol, lambda ex, sym: _fetch_ohlcv(ex, sym, timeframe, limit))
+
+
+def _fetch_ohlcv(exchange_id: str, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
     import ccxt  # imported here so this file still loads without ccxt configured
 
     exchange_class = getattr(ccxt, exchange_id)
     exchange = exchange_class({"enableRateLimit": True})
     raw = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    if not raw:
+        raise ValueError("no candles returned")
     df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df.set_index("timestamp")
 
 
 def get_live_ohlcv_paginated(exchange_id: str, symbol: str, timeframe: str, days: int) -> pd.DataFrame:
+    return _with_fallback(exchange_id, symbol, lambda ex, sym: _fetch_paginated(ex, sym, timeframe, days))
+
+
+def _fetch_paginated(exchange_id: str, symbol: str, timeframe: str, days: int) -> pd.DataFrame:
     """
     Stitches together `days` worth of history from an exchange whose
     single-request limit is smaller than that. Binance caps one call at

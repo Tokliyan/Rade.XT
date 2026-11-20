@@ -1,13 +1,13 @@
 name: Night Run
 
 # Rade.XT's part of the Night Run: tests -> data -> refine -> report to JARVIS.
-# Runs before the other overnight jobs so the 6am morning check can include it.
+# Must finish before the 5:52am Morning Check so it can include this report.
 # Refine can auto-apply new strategy settings to the PAPER agents only — see
 # nightly_review.py for every gate it has to pass first.
 
 on:
   schedule:
-    - cron: "30 17 * * *"   # 17:30 UTC = 4:30am Sydney (AEDT), 3:30am in winter
+    - cron: "0 11 * * *"    # 11:00 UTC = 10pm Sydney (AEDT). GitHub starts scheduled runs hours late (seen: 6-10h), so this has to be early to land before the 5:52am Morning Check
   workflow_dispatch: {}
 
 jobs:
