@@ -106,13 +106,26 @@ def fetch_real2(start="1993-01-01"):
     """One bulk Yahoo download: tradable markets + macro series (VIX, 10-year and 13-week yields)."""
     import yfinance as yf
     tick = {**UNIVERSE2, **MACRO}
-    d = yf.download(list(tick.values()), start=start, progress=False, auto_adjust=True, group_by="column", threads=True)["Close"]
+    d = yf.download(list(tick.values()), start=start, progress=False, auto_adjust=True, group_by="column", threads=False)["Close"]
     d.index = pd.DatetimeIndex(d.index).tz_localize(None)
     d = d[~d.index.duplicated()].sort_index()
+    import time as _t
+    for name, tk in tick.items():                      # retry anything that failed (e.g. Yahoo cache "database is locked")
+        for attempt in range(4):
+            if tk in d.columns and d[tk].notna().sum() > 0:
+                break
+            _t.sleep(2 + attempt * 2)
+            try:
+                one = yf.download(tk, start=start, progress=False, auto_adjust=True, threads=False)["Close"]
+                one = one.iloc[:, 0] if isinstance(one, pd.DataFrame) else one
+                one.index = pd.DatetimeIndex(one.index).tz_localize(None)
+                d[tk] = one
+            except Exception as e:
+                print(f"[data] retry {name} ({tk}) {attempt+1}: {e}")
     cols, macro = {}, {}
     for name, tk in tick.items():
-        if tk not in d.columns:
-            print(f"[data] {name} ({tk}) missing")
+        if tk not in d.columns or d[tk].notna().sum() == 0:
+            print(f"[data] {name} ({tk}) MISSING after retries")
             continue
         s = d[tk].dropna()
         if len(s) < 1500 and name not in ("ETH", "HYG"):
