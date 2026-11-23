@@ -132,6 +132,22 @@ def main():
             fam_acc.setdefault(k, []).append(v["mean_total_ret"])
     print("Holdout total return of frozen-committee members by family (mean over runs):", {k: pct(float(np.mean(v))) for k, v in fam_acc.items()})
 
+    # ---- extra detail printed to the log (so results are readable without downloading the artifact)
+    print("\n---- per run ----")
+    cols = ["seed", "cull", "frozen_ann", "frozen_net100", "frozen_cost2x", "frozen_maxdd", "wf_hold_ann", "wf_hold_net100", "pop_hold_ann", "skill_hold_t"]
+    print(df[cols].round(3).to_string(index=False))
+    g = pd.concat(gens)
+    g["yr"] = pd.to_datetime(g["start"]).dt.year
+    h = g.dropna(subset=["comm_ret"])
+    y = h.groupby("yr").agg(committee=("comm_ret", "mean"), population=("pop_mean", "mean"), best_bot=("best_ret", "mean"))
+    print("\n---- average 5-month return by year (%, mean over runs): committee = bots we selected, population = all 1000, best_bot = naive chart ----")
+    print((y * 100).round(1).to_string())
+    print(f"\nCommittee 5-month periods: worst {h.comm_ret.min()*100:+.1f}%  best {h.comm_ret.max()*100:+.1f}%  positive {(h.comm_ret > 0).mean()*100:.0f}% of the time")
+    print(f"Mean per 5 months: committee {h.comm_ret.mean()*100:+.2f}%  population {h.pop_mean.mean()*100:+.2f}%")
+    for era in ("train", "hold"):
+        e = h[h.era == era]
+        print(f"  {era}: committee {e.comm_ret.mean()*100:+.2f}%  population {e.pop_mean.mean()*100:+.2f}%  committee worst period {e.comm_ret.min()*100:+.1f}%")
+
 
 if __name__ == "__main__":
     main()
