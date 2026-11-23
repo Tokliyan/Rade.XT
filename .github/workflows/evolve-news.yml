@@ -1,0 +1,35 @@
+name: Evolve News Download
+
+# Manual-only. Downloads point-in-time daily news word counts (Wikipedia current events, keyless),
+# capped at ~9 minutes, resumable, and commits the small csv back to the repo.
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Download time budget in minutes"
+        default: "9"
+
+permissions:
+  contents: write
+
+jobs:
+  news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pandas requests
+      - name: Download news counts
+        working-directory: research/evolution
+        run: python news.py --start 2004-01-01 --minutes ${{ github.event.inputs.minutes || '9' }} --out data/news_counts.csv
+      - name: Commit csv
+        run: |
+          git config user.name "rade-xt-research"
+          git config user.email "research@users.noreply.github.com"
+          git add research/evolution/data/news_counts.csv
+          git diff --cached --quiet || git commit -m "Evolution research: news counts update"
+          git pull --rebase -q origin main || true
+          git push -q origin HEAD:main || true
