@@ -1,0 +1,42 @@
+name: Evolve Research
+
+# Manual-only research run. Never touches Supabase, the live agents or the dashboard.
+# 1) self-test on fake markets (random = must find nothing, planted = must find it)
+# 2) the real run: 1000 bots x 70 generations x several seeds on 1998-today daily data
+# Results are printed in the log and uploaded as a downloadable artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: "Independent seeds per cull setting"
+        default: "6"
+
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install numpy pandas yfinance
+
+      - name: Self-test on fake markets
+        working-directory: research/evolution
+        run: python test_engine.py
+
+      - name: Real-history evolution
+        working-directory: research/evolution
+        run: python run.py --data real --seeds ${{ github.event.inputs.seeds || '6' }} --culls 0.10 0.30 --out out
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolve-research-results
+          path: research/evolution/out/
