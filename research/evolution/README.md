@@ -1,16 +1,17 @@
 # Evolution research (standalone)
 
-1,000 bots evolve through daily market history from Jan 1998 to today.
-Six strategy families (trend, mean-reversion, breakout, time-series momentum,
-volatility timing, turn-of-month calendar) on 12 indices/commodities/FX/bonds/BTC.
-Every 5 months: kill the worst, clone the best with mutation, add 5% random newcomers.
-Islands (one per family) keep the population diverse. Bots die at -30% from peak.
+Never touches Supabase, the live agents or the dashboard. Manual GitHub workflows only.
 
-Honest scoring: the headline is how SELECTED bots do in the NEXT period, plus a
-frozen committee tested on a 2018-today holdout. Never the best bot's own score.
+| File | What it does |
+|---|---|
+| `engine.py` | 1,000 bots, 9 strategy families, 45 markets, 5-month generations from 1998. Optional "gates": a bot can step aside when a macro or news input is extreme. |
+| `run.py` | **Test A** (widened search): Frozen Ten, Hall of Fame, luck baseline on shuffled fake markets, news on/off comparison, repeat offenders, which periods produce passes. |
+| `scan.py` | **Test B** (gap scanner): 10 written ideas, one at a time, through the 6 gates. |
+| `report.py` | Plain-English strategy text, verdicts (CANDIDATE / WATCH / LUCKY?), luck checks. |
+| `news.py` | Point-in-time daily news counts from Wikipedia "Current events" (page exactly as it stood at the end of each day, fixed word lists, no AI reading it). |
+| `test_engine.py` | Self-tests: no peeking at the future (prices AND news), random market finds nothing, planted edge is found, planted news signal is used. |
+| `probe.py` | Checks that data sources are reachable and how fast. |
 
-    cd research/evolution
-    python test_engine.py                      # fake-market self-test
-    python run.py --data real --seeds 6        # real history (needs internet)
+Pass rule: a 5-month period passes if the bot returns >= +6.5% net of trading costs. A second count uses a $100 account with a flat $2 per trade.
 
-Not connected to the live bots, Supabase or the dashboard.
+Workflows: **Evolve News Download** (once), then **Evolve Research**. Results are committed to `research/evolution/results/`.

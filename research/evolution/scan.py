@@ -159,7 +159,8 @@ def main():
                      "holdout_ann_$100_median": d["hold_ann_100"].median(), "share_markets_positive": (d["ann"] > 0).mean(),
                      "pass6.5_rate": d["pass"].median(), "market_pass_rate": d["bh_pass"].median(), "mean_5m": d["mean5"].median(), "market_mean_5m": d["bh_mean5"].median(),
                      "trades_yr": d["trades_yr"].median(), "dsr": dsr, "G1": True, "G2": bool(g2), "G3": bool(g3), "G4": bool(g4), "G5": bool(g5),
-                     "gates": int(1 + g2 + g3 + g4 + g5), "why": idea["why"]})
+                     "gates": int(1 + g2 + g3 + g4 + g5), "why": idea["why"],
+                     "breakeven_account": (2.0 * d["trades_yr"].median() / d["ann"].median()) if d["ann"].median() > 0 else float("inf")})
     T = pd.DataFrame(rows).sort_values(["gates", "pass6.5_rate"], ascending=False)
     T.to_csv(os.path.join(a.out, "scan.csv"), index=False)
     print("\n" + "=" * 100)
@@ -171,6 +172,8 @@ def main():
         print(f"\n{r['idea']:22s} {gl} ({int(r['gates'])}/5 gates)   markets {int(r['markets'])}")
         print(f"   net annual (median market) {r['net_ann_median']*100:+.1f}%   on $100 with $2 fees {r['net_ann_$100_median']*100:+.1f}%   holdout 2018+ on $100 {r['holdout_ann_$100_median']*100:+.1f}%   markets positive {r['share_markets_positive']*100:.0f}%")
         print(f"   hits +6.5% per 5 months in {r['pass6.5_rate']*100:.0f}% of periods (just holding the market: {r['market_pass_rate']*100:.0f}%); mean per 5m {r['mean_5m']*100:+.1f}% vs holding {r['market_mean_5m']*100:+.1f}%; {r['trades_yr']:.1f} trades a year; deflated-Sharpe prob {r['dsr']:.2f}")
+        be = r["breakeven_account"]
+        print(f"   $2-per-trade fees stop eating the edge only above an account of about {'never (no edge before fees)' if not np.isfinite(be) else '$' + format(be, ',.0f')}")
         print(f"   why anyone would lose: {r['why']}")
     passed = T[T["gates"] >= 5]
     print(f"\nIdeas passing all of gates 1-5: {len(passed)} of {len(T)}" + (": " + ", ".join(passed['idea']) if len(passed) else ". None goes to the forward paper queue."))
