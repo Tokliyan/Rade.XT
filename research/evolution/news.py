@@ -12,6 +12,13 @@ No text is stored and no AI model reads it, so nothing "knows" what happens next
 
   python news.py --start 2004-01-01 --minutes 9 --out data/news_counts.csv
 Resumable: days already in the csv are skipped. Stops cleanly at the time budget.
+
+Speed: Wikipedia rate-limits per-day point-in-time requests (about 4 per second sustained, so 8,000 days
+would take ~35 minutes). So there are two modes:
+  --mode pit    the exact page as of the end of each day (slow, pure)
+  --mode batch  25 days per request, latest version of each page (fast, ~2 minutes)
+  --mode audit  fetch the exact point-in-time page for a random sample of days and measure how much the fast
+                version differs. The features are word-list densities, so later edits hardly move them, but we measure it.
 """
 import argparse, concurrent.futures as cf, os, re, time
 import pandas as pd
@@ -73,6 +80,9 @@ def fetch_day(d, tries=6):
     for k in range(tries):
         try:
             r = requests.get(API, params=params, headers=UA, timeout=30)
+            if r.status_code == 429:
+                time.sleep(min(float(r.headers.get("Retry-After", 10)) + 1, 30))
+                continue
             if r.status_code == 200 and r.text.startswith("{"):
                 j = r.json()
                 if "error" in j and j["error"].get("code") == "maxlag":
@@ -95,6 +105,116 @@ def fetch_day(d, tries=6):
     return {"date": d, "ok": -1}                          # transient failure: retried on the next run
 
 
+def fetch_batch(days, tries=6):
+    """Latest version of up to 25 daily pages in ONE request. Returns {day: row}, and records when each page was last edited."""
+    titles = {title(d): d for d in days}
+    params = {"action": "query", "prop": "revisions", "rvprop": "content|timestamp", "rvslots": "main", "titles": "|".join(titles),
+              "format": "json", "formatversion": 2, "maxlag": 5}
+    out, cont = {}, {}
+    for _ in range(40):                                     # follow API continuation if the answer is split
+        got = None
+        for k in range(tries):
+            try:
+                r = requests.get(API, params={**params, **cont}, headers=UA, timeout=60)
+                if r.status_code == 429:
+                    time.sleep(min(float(r.headers.get("Retry-After", 10)) + 1, 30))
+                    continue
+                if r.status_code == 200 and r.text.startswith("{"):
+                    j = r.json()
+                    if "error" in j:
+                        time.sleep(2 + k)
+                        continue
+                    got = j
+                    break
+                time.sleep(1.5 * (k + 1))
+            except Exception:
+                time.sleep(1.5 * (k + 1))
+        if got is None:
+            return {d: {"date": d, "ok": -1} for d in days if d not in out}
+        for p in got["query"]["pages"]:
+            d = titles.get(p["title"])
+            if d is None:
+                continue
+            if p.get("missing") or "revisions" not in p:
+                out.setdefault(d, {"date": d, "ok": 0})
+                continue
+            rev = p["revisions"][0]
+            row = score(rev["slots"]["main"]["content"])
+            if row is None:
+                out[d] = {"date": d, "ok": 0}
+            else:
+                row.update(date=d, ok=1, last_edit=rev["timestamp"][:10])
+                out[d] = row
+        cont = got.get("continue")
+        if not cont:
+            break
+    for d in days:
+        out.setdefault(d, {"date": d, "ok": 0})
+    return out
+
+
+def run_batch(a, days):
+    t0 = time.time()
+    chunks = [days[i:i + 25] for i in range(0, len(days), 25)]
+    rows, deadline = [], t0 + a.minutes * 60
+    with cf.ThreadPoolExecutor(2) as ex:
+        futs = []
+        for c in chunks:
+            futs.append(ex.submit(fetch_batch, c))
+        for n, f in enumerate(futs):
+            try:
+                rows.extend(f.result(timeout=max(5, deadline - time.time())).values())
+            except Exception:
+                break
+            if n % 40 == 0:
+                print(f"  batch {n}/{len(chunks)}  {time.time()-t0:.0f}s", flush=True)
+            if time.time() > deadline:
+                print("  time budget reached", flush=True)
+                break
+        for f in futs:
+            f.cancel()
+    return pd.DataFrame(rows)
+
+
+def audit(a):
+    """Compare the FAST version (latest page) with the TRUE point-in-time version on a sample of days, to measure any hindsight leak."""
+    fast = pd.read_csv(a.out, parse_dates=["date"])
+    fast = fast[fast.ok == 1].set_index("date")
+    pit_old = pd.read_csv(a.pit, parse_dates=["date"]) if os.path.exists(a.pit) else pd.DataFrame(columns=["date", "ok"])
+    pit_old = pit_old[pit_old.ok == 1].set_index("date")
+    rng = pd.Series(fast.index)
+    sample = rng[rng >= "2009-06-01"].sample(min(a.audit, int((rng >= "2009-06-01").sum())), random_state=1).sort_values().tolist()
+    t0 = time.time()
+    got = []
+    with cf.ThreadPoolExecutor(3) as ex:
+        for r in ex.map(fetch_day, sample):
+            got.append(r)
+            if time.time() - t0 > a.minutes * 60:
+                break
+    pit_new = pd.DataFrame(got)
+    pit_new = pit_new[pit_new.ok == 1].set_index("date")
+    pit = pd.concat([pit_old, pit_new]).sort_index()
+    cols = ["words", "neg", "pos", "conflict", "fincrisis", "ratesinfl", "trade", "energy", "health", "disaster"]
+    both = pit.join(fast, lsuffix="_pit", rsuffix="_fast", how="inner")
+    print(f"AUDIT: {len(both)} days compared (PIT cached {len(pit_old)} + fresh {len(pit_new)})")
+    rep = []
+    for c in cols:
+        x, y = both[c + "_pit"], both[c + "_fast"]
+        rep.append({"feature": c, "corr": float(x.corr(y)), "median_pit": float(x.median()), "median_latest": float(y.median())})
+    if "tone" not in cols:
+        both["tone_pit"] = both["pos_pit"] - both["neg_pit"]
+        both["tone_fast"] = both["pos_fast"] - both["neg_fast"]
+        rep.append({"feature": "tone(pos-neg)", "corr": float(both["tone_pit"].corr(both["tone_fast"])), "median_pit": float(both["tone_pit"].median()), "median_latest": float(both["tone_fast"].median())})
+    R = pd.DataFrame(rep)
+    print(R.round(3).to_string(index=False))
+    if "last_edit" in fast.columns:
+        le = pd.to_datetime(fast["last_edit"], errors="coerce")
+        lag = (le - fast.index.to_series()).dt.days
+        print(f"last edit of page vs its day: median {lag.median():.0f} days after; edited more than 3 days after its day: {(lag>3).mean()*100:.0f}% of pages; more than a year after: {(lag>365).mean()*100:.0f}%")
+    R.to_csv(os.path.join(os.path.dirname(a.out) or ".", "news_audit.csv"), index=False)
+    both.reset_index().to_csv(os.path.join(os.path.dirname(a.out) or ".", "news_audit_pairs.csv"), index=False)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="2004-01-01")
@@ -102,10 +222,24 @@ def main():
     ap.add_argument("--minutes", type=float, default=9.0)
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--out", default="data/news_counts.csv")
+    ap.add_argument("--mode", default="pit", choices=["pit", "batch", "audit"])
+    ap.add_argument("--pit", default="data/news_pit.csv")
+    ap.add_argument("--audit", type=int, default=200)
     a = ap.parse_args()
     t0 = time.time()
+    if a.mode == "audit":
+        return audit(a)
     end = pd.Timestamp(a.end) if a.end else pd.Timestamp.utcnow().tz_localize(None).normalize() - pd.Timedelta(days=1)
     days = pd.date_range(a.start, end)
+    if a.mode == "batch":
+        res = run_batch(a, list(days))
+        res = res[res["ok"] >= 0].sort_values("date")
+        os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+        res.to_csv(a.out, index=False)
+        g = res.assign(y=res["date"].dt.year).groupby("y").agg(days=("date", "size"), with_page=("ok", "sum"), avg_words=("words", "mean"))
+        print(f"saved {len(res)} days to {a.out} in {time.time()-t0:.0f}s (batch mode: latest version of each page)")
+        print(g.round(0).to_string())
+        return
     done = pd.DataFrame()
     if os.path.exists(a.out):
         done = pd.read_csv(a.out, parse_dates=["date"])
