@@ -165,7 +165,6 @@ def main():
     EV = EV.sort_values(["passes", "life_mean"], ascending=False)
     EV["key"] = EV["family"] + "|" + EV["market"]
     seen = EV.groupby("key")["run"].nunique().rename("seen_in_runs")
-    EVd = EV.drop_duplicates("key").join(seen, on="key").sort_values(["verdict", "all_rate"], key=lambda s: s.map({"CANDIDATE": 0, "WATCH": 1, "LUCKY?": 2}) if s.name == "verdict" else -s)
     hof = EV.drop_duplicates("key").join(seen, on="key")
     hof["lb"] = [R.wilson_lb(int(k), int(n)) for k, n in zip(hof["passes"], hof["periods"])]
     hof = hof.sort_values(["lb", "life_mean"], ascending=False)
