@@ -1,0 +1,19 @@
+name: Evolve Probe
+
+# Manual-only. Checks that free keyless data sources are reachable and how fast they are.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy pandas yfinance requests
+      - name: Probe sources
+        working-directory: research/evolution
+        run: python probe.py wiki yf
