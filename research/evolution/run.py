@@ -47,8 +47,8 @@ def skill_stats(rows, era):
     return float(d.mean() / (d.std() / np.sqrt(len(d)))) if d.std() > 0 else 0.0
 
 
-def do_run(F, seed, cull, pop, variant, kind, keep=False):
-    out = E.evolve(F, pop=pop, cull=cull, seed=seed)
+def do_run(F, seed, cull, pop, variant, kind, keep=False, per_market=None):
+    out = E.evolve(F, pop=pop, cull=cull, seed=seed, per_market=per_market)
     p = R.period_table(F, out["perf"])
     luck = R.hof_luck_stats(p, out["genomes"])
     s = {"variant": variant, "kind": kind, "seed": seed, "cull": cull, **luck,
@@ -74,6 +74,8 @@ def main():
     ap.add_argument("--out", default="out")
     ap.add_argument("--exclude", nargs="*", default=[])
     ap.add_argument("--variants", nargs="*", default=["full", "macro", "none"])
+    ap.add_argument("--label", default="all markets")
+    ap.add_argument("--per-market", type=int, default=None, help="diversified Frozen Ten: at most N bots per market and no twins")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     t_start = time.time()
@@ -98,7 +100,7 @@ def main():
     for v in a.variants:
         for cull in a.culls:
             for s in range(a.seeds):
-                row, keep = do_run(Fs[v], 1000 + s, cull, a.pop, v, "real", keep=(v == "full" or v == a.variants[0]))
+                row, keep = do_run(Fs[v], 1000 + s, cull, a.pop, v, "real", keep=(v == "full" or v == a.variants[0]), per_market=a.per_market)
                 summaries.append(row)
                 if keep is not None and v == a.variants[0]:
                     kept.append((row, keep))
@@ -108,7 +110,7 @@ def main():
         shuffled = E.block_shuffle_prices(prices, seed)
         extn = E.block_shuffle_rows(exts[a.variants[0]], seed) if exts[a.variants[0]] is not None else None
         Fn = E.Features(shuffled, extn)
-        row, _ = do_run(Fn, seed, 0.10, a.pop, "null", "null")
+        row, _ = do_run(Fn, seed, 0.10, a.pop, "null", "null", per_market=a.per_market)
         summaries.append(row)
     print(f"null (shuffled-market) runs done ({time.time()-t_start:.0f}s)", flush=True)
     S = pd.DataFrame(summaries)
@@ -139,7 +141,7 @@ def main():
         print(s); L.append(s)
 
     say("=" * 100)
-    say(f"TEST A: widened search. {F.A} markets, 9 strategy families, {n_runs} runs per variant, 1,000 bots, 1998 -> {F.dates[-1].date()}")
+    say(f"[{a.label}] TEST A: widened search. {F.A} markets, 9 strategy families, {n_runs} runs per variant, 1,000 bots, 1998 -> {F.dates[-1].date()}")
     say(f"Pass rule: >= +6.5% in a 5-month period, net of trading costs ($100 version: flat $2 per trade). Holdout = 2018-01 onward.")
     say("=" * 100)
 

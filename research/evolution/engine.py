@@ -450,17 +450,28 @@ def fitness_of(hist):
     return np.where(den > 0, num / np.maximum(den, 1e-12), -9.0)
 
 
-def pick_committee(fit, fam, K=10, per_fam=3, exclude=None):
+def pick_committee(fit, fam, K=10, per_fam=3, exclude=None, asset=None, per_market=None, g=None):
+    """Top K by fitness, at most per_fam per strategy family. Optional diversity rules (used only in the 'diversified' check):
+    at most per_market bots on one market, and no near-identical twins."""
     order = np.argsort(-fit)
     cnt = np.zeros(NF, int)
+    cnt_m, seen = {}, set()
     chosen = []
     for i in order:
         if exclude is not None and exclude[i]:
             continue
         f = int(fam[i])
-        if cnt[f] < per_fam:
-            chosen.append(int(i))
-            cnt[f] += 1
+        if cnt[f] >= per_fam:
+            continue
+        if per_market is not None:
+            a = int(asset[i])
+            key = (f, a, int(round(g["p1"][i])), int(round(g["p2"][i] * 10)))
+            if cnt_m.get(a, 0) >= per_market or key in seen:
+                continue
+            cnt_m[a] = cnt_m.get(a, 0) + 1
+            seen.add(key)
+        chosen.append(int(i))
+        cnt[f] += 1
         if len(chosen) >= K:
             break
     return np.array(chosen, int)
@@ -474,7 +485,7 @@ def net100_of(F, g, ret, trades, t0):
 
 
 def evolve(F: Features, pop=1000, cull=CULL_DEFAULT, seed=0, start="1998-01-01", holdout="2018-01-01",
-           K=10, per_fam=3, immigrants=0.05, cost_scale=1.0, verbose=False):
+           K=10, per_fam=3, immigrants=0.05, cost_scale=1.0, verbose=False, per_market=None):
     """Walk-forward evolution. Also records every bot's every period (for the Hall of Fame) and
     freezes the top K (selected on data strictly before `holdout`) for the Frozen Ten test."""
     rng = np.random.default_rng(seed)
@@ -524,7 +535,7 @@ def evolve(F: Features, pop=1000, cull=CULL_DEFAULT, seed=0, start="1998-01-01",
         hist[:, 1:] = hist[:, :-1]
         hist[:, 0] = score
         fit = fitness_of(hist)
-        committee = pick_committee(fit, g["fam"], K, per_fam)
+        committee = pick_committee(fit, g["fam"], K, per_fam, asset=g["asset"], per_market=per_market, g=g)
         if frozen is None and t1 == hold_idx:
             frozen = (take(g, committee), t1, bid[committee].copy())      # genomes chosen on data strictly before the holdout
         # ---- selection: immigrants, then per-island kill & clone

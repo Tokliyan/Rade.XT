@@ -18,6 +18,12 @@ on:
       exclude:
         description: "Markets to drop, space separated (e.g. BTC ETH). Leave empty for all."
         default: ""
+      per_market:
+        description: "Diversified Frozen Ten: max bots per market (leave empty for the pre-declared version)"
+        default: ""
+      label:
+        description: "Name of this run (results go to research/evolution/results/<label>/)"
+        default: "main"
 
 permissions:
   contents: write
@@ -42,7 +48,7 @@ jobs:
 
       - name: Test A - widened evolution search
         working-directory: research/evolution
-        run: python run.py --data real --seeds ${{ github.event.inputs.seeds || '6' }} --nulls ${{ github.event.inputs.nulls || '6' }} --culls 0.10 0.30 --out out ${{ github.event.inputs.exclude != '' && format('--exclude {0}', github.event.inputs.exclude) || '' }}
+        run: python run.py --data real --seeds ${{ github.event.inputs.seeds || '6' }} --nulls ${{ github.event.inputs.nulls || '6' }} --culls 0.10 0.30 --out out --label "${{ github.event.inputs.label || 'main' }}" ${{ github.event.inputs.per_market != '' && format('--per-market {0}', github.event.inputs.per_market) || '' }} ${{ github.event.inputs.exclude != '' && format('--exclude {0}', github.event.inputs.exclude) || '' }}
 
       - name: Test B - gap scanner
         working-directory: research/evolution
@@ -51,8 +57,9 @@ jobs:
       - name: Commit results
         if: always()
         run: |
-          mkdir -p research/evolution/results
-          cp research/evolution/out/*.csv research/evolution/out/*.md research/evolution/out/*.json research/evolution/results/ 2>/dev/null || true
+          D=research/evolution/results/${{ github.event.inputs.label || 'main' }}
+          mkdir -p $D
+          cp research/evolution/out/*.csv research/evolution/out/*.md research/evolution/out/*.json $D/ 2>/dev/null || true
           git config user.name "rade-xt-research"
           git config user.email "research@users.noreply.github.com"
           git add research/evolution/results/
