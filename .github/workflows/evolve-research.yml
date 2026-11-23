@@ -11,6 +11,9 @@ on:
       seeds:
         description: "Independent seeds per cull setting"
         default: "6"
+      exclude:
+        description: "Assets to drop, space separated (e.g. BTC). Leave empty for all."
+        default: ""
 
 jobs:
   evolve:
@@ -32,7 +35,7 @@ jobs:
 
       - name: Real-history evolution
         working-directory: research/evolution
-        run: python run.py --data real --seeds ${{ github.event.inputs.seeds || '6' }} --culls 0.10 0.30 --out out
+        run: python run.py --data real --seeds ${{ github.event.inputs.seeds || '6' }} --culls 0.10 0.30 --out out ${{ github.event.inputs.exclude != '' && format('--exclude {0}', github.event.inputs.exclude) || '' }}
 
       - name: Upload results
         if: always()

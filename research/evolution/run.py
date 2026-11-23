@@ -67,12 +67,16 @@ def main():
     ap.add_argument("--culls", type=float, nargs="+", default=[0.10, 0.30])
     ap.add_argument("--pop", type=int, default=1000)
     ap.add_argument("--out", default="out")
+    ap.add_argument("--exclude", nargs="*", default=[], help="asset names to drop from the universe, e.g. BTC")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     if a.data == "real":
         prices = D.fetch_real(cache=os.path.join(a.out, "prices.csv"))
     else:
         prices = D.synthetic(a.data.split("_")[1], seed=1)
+    if a.exclude:
+        prices = prices.drop(columns=[c for c in a.exclude if c in prices.columns])
+        print("excluded from universe:", a.exclude)
     F = E.Features(prices)
     cover = pd.DataFrame({"asset": F.names, "first_date": [str(F.dates[s].date()) if s < F.T else "none" for s in F.start]})
     cover.to_csv(os.path.join(a.out, "universe.csv"), index=False)
