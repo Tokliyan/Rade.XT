@@ -48,6 +48,7 @@ def title(d):
 
 
 def clean(txt):
+    txt = re.sub(r"\{\{\s*Current events\s*\|[^{}]*?content\s*=", " ", txt, flags=re.I)   # newer pages wrap the body in a template: keep its text
     txt = re.sub(r"<ref[^>]*?/>", " ", txt)
     txt = re.sub(r"<ref[^>]*>.*?</ref>", " ", txt, flags=re.S)
     for _ in range(4):
@@ -59,6 +60,7 @@ def clean(txt):
     txt = re.sub(r"https?://\S+", " ", txt)
     txt = re.sub(r"<[^>]+>", " ", txt)
     txt = re.sub(r"(?m)^[;=].*$", " ", txt)           # section headings
+    txt = re.sub(r"(?m)^\s*'''[^'\n]+'''\s*$", " ", txt)   # bold section headings
     return txt.replace("'''", "").replace("''", "").lower()
 
 
@@ -73,15 +75,21 @@ def score(txt):
     return row
 
 
-def fetch_day(d, tries=6):
+_PAUSE = {"until": 0.0}      # shared by all workers: when Wikipedia says slow down, everybody waits
+
+
+def fetch_day(d, tries=8):
     nxt = (d + pd.Timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
     params = {"action": "query", "prop": "revisions", "rvprop": "content|timestamp", "rvslots": "main", "rvlimit": 1,
               "rvstart": nxt, "rvdir": "older", "titles": title(d), "format": "json", "formatversion": 2, "maxlag": 5}
     for k in range(tries):
         try:
+            w = _PAUSE["until"] - time.time()
+            if w > 0:
+                time.sleep(w)
             r = requests.get(API, params=params, headers=UA, timeout=30)
             if r.status_code == 429:
-                time.sleep(min(float(r.headers.get("Retry-After", 10)) + 1, 30))
+                _PAUSE["until"] = max(_PAUSE["until"], time.time() + min(float(r.headers.get("Retry-After", 10)) + 1, 30))
                 continue
             if r.status_code == 200 and r.text.startswith("{"):
                 j = r.json()
@@ -219,6 +227,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="2004-01-01")
     ap.add_argument("--end", default=None)
+    ap.add_argument("--step", type=int, default=1, help="take every Nth day (saves requests; features carry forward in between)")
     ap.add_argument("--minutes", type=float, default=9.0)
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--out", default="data/news_counts.csv")
@@ -230,7 +239,7 @@ def main():
     if a.mode == "audit":
         return audit(a)
     end = pd.Timestamp(a.end) if a.end else pd.Timestamp.utcnow().tz_localize(None).normalize() - pd.Timedelta(days=1)
-    days = pd.date_range(a.start, end)
+    days = pd.date_range(a.start, end)[::a.step]
     if a.mode == "batch":
         res = run_batch(a, list(days))
         res = res[res["ok"] >= 0].sort_values("date")

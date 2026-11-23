@@ -1,14 +1,14 @@
 name: Evolve News Download
 
-# Manual-only. Downloads daily news word counts (Wikipedia current events, keyless) in ~2 minutes using batch mode,
-# then audits a random sample of days against the exact point-in-time pages to measure any hindsight leak.
+# Manual-only. Downloads daily news word counts (Wikipedia current events, keyless) as TRUE point-in-time pages
+# (the page exactly as it stood at the end of each day), capped at ~9 minutes and resumable.
 # Commits the small csv files back to the repo.
 on:
   workflow_dispatch:
     inputs:
       minutes:
         description: "Time budget in minutes for each step"
-        default: "5"
+        default: "9"
 
 permissions:
   contents: write
@@ -23,12 +23,9 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pandas requests
-      - name: Download news counts (batch mode)
+      - name: Download point-in-time news counts (every 4th day from 2009, daily 2006-2009 already cached)
         working-directory: research/evolution
-        run: python news.py --mode batch --start 2004-01-01 --minutes ${{ github.event.inputs.minutes || '5' }} --out data/news_counts.csv
-      - name: Audit against exact point-in-time pages
-        working-directory: research/evolution
-        run: python news.py --mode audit --audit 200 --minutes ${{ github.event.inputs.minutes || '5' }} --out data/news_counts.csv --pit data/news_pit.csv
+        run: python news.py --mode pit --start 2009-03-01 --step 4 --minutes ${{ github.event.inputs.minutes || '9' }} --workers 4 --out data/news_pit.csv
       - name: Commit csv
         run: |
           git config user.name "rade-xt-research"

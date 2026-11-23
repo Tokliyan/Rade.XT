@@ -70,7 +70,7 @@ def main():
     ap.add_argument("--culls", type=float, nargs="+", default=[0.10, 0.30])
     ap.add_argument("--pop", type=int, default=1000)
     ap.add_argument("--nulls", type=int, default=6)
-    ap.add_argument("--news", default="data/news_counts.csv")
+    ap.add_argument("--news", default="data/news_pit.csv")
     ap.add_argument("--out", default="out")
     ap.add_argument("--exclude", nargs="*", default=[])
     ap.add_argument("--variants", nargs="*", default=["full", "macro", "none"])

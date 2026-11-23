@@ -90,7 +90,7 @@ def ann(r, n=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="real", choices=["real", "synth_planted", "synth_random"])
-    ap.add_argument("--news", default="data/news_counts.csv")
+    ap.add_argument("--news", default="data/news_pit.csv")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)

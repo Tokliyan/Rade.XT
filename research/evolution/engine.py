@@ -85,7 +85,7 @@ def make_ext(dates, macro=None, news=None):
                 "news_conflict": n["conflict"], "news_fincrisis": n["fincrisis"], "news_ratesinfl": n["ratesinfl"],
                 "news_trade": n["trade"], "news_energy": n["energy"], "news_health": n["health"], "news_disaster": n["disaster"]}
         for k, s in base.items():
-            cols[k] = _zs(s, 250, 60)
+            cols[k] = _zs(s, 250, 25)
     out = {}
     for k, s in cols.items():
         for w in XWIN:
