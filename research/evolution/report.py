@@ -124,6 +124,7 @@ def evaluate_bots(F, bots, genomes, bnds, hold_idx=None):
     gd = genome_dict(genomes, bots.index)
     R, Tr, DD, N100 = E.window_returns(F, gd, windows)
     BH = E.buyhold_windows(F, windows)
+    w_years = np.array([F.dates[w[0]].year for w in windows])
     rows = []
     for i, bid in enumerate(bots.index):
         a = int(gd["asset"][i])
@@ -134,38 +135,44 @@ def evaluate_bots(F, bots, genomes, bnds, hold_idx=None):
         before = ok & (gens < first)
         allr = float(np.mean(R[i][ok] >= PASS)) if ok.any() else np.nan
         bh = float(np.mean(BH[a][ok] >= PASS)) if ok.any() else np.nan
+        all_mean = float(np.mean(R[i][ok])) if ok.any() else np.nan
+        bh_all_mean = float(np.nanmean(BH[a][ok])) if ok.any() else np.nan
         fr = float(np.mean(R[i][fwd] >= PASS)) if fwd.any() else np.nan
         fr100 = float(np.mean(N100[i][fwd] >= PASS)) if fwd.any() else np.nan
         bh_f = float(np.mean(BH[a][fwd] >= PASS)) if fwd.any() else np.nan
         fwd_mean = float(np.mean(R[i][fwd])) if fwd.any() else np.nan
+        bh_fm = float(np.nanmean(BH[a][fwd])) if fwd.any() else np.nan
         r = row_of(gd, i)
         name = F.names[a]
         flags, good = [], []
         n_fwd = int(fwd.sum())
-        if n_fwd >= 6 and fr >= 0.45 and fr >= bh_f + 0.10:
-            good.append(f"keeps passing after it was selected ({fr*100:.0f}% of {n_fwd} later periods vs {bh_f*100:.0f}% for just holding {name})")
+        fees_ok = not (bots.loc[bid, "passes100"] < 0.5 * bots.loc[bid, "passes"])
+        keeps = n_fwd >= 6 and fr >= 0.40 and (fr >= bh_f + 0.05 or fwd_mean >= bh_fm + 0.01)
+        if keeps:
+            good.append(f"keeps passing after it was selected ({fr*100:.0f}% of {n_fwd} later periods pass, mean {fwd_mean*100:+.1f}%; just holding {name}: {bh_f*100:.0f}%, mean {bh_fm*100:+.1f}%)")
         elif n_fwd < 6:
             flags.append(f"only {n_fwd} later periods to check")
         else:
-            flags.append(f"after selection it passes {fr*100:.0f}% of {n_fwd} later periods (holding {name} passes {bh_f*100:.0f}%)")
-        if allr >= bh + 0.10:
-            good.append(f"over all history passes {allr*100:.0f}% vs {bh*100:.0f}% for holding {name}")
+            flags.append(f"after selection it passes {fr*100:.0f}% of {n_fwd} later periods, mean {fwd_mean*100:+.1f}% (holding {name}: {bh_f*100:.0f}%, mean {bh_fm*100:+.1f}%)")
+        beats_all = allr >= bh + 0.05 or all_mean >= bh_all_mean + 0.01
+        if beats_all:
+            good.append(f"over all history passes {allr*100:.0f}% (mean {all_mean*100:+.1f}%) vs {bh*100:.0f}% (mean {bh_all_mean*100:+.1f}%) for holding {name}")
         else:
-            flags.append(f"over all history {allr*100:.0f}% vs {bh*100:.0f}% for just holding {name}")
-        py = int(bots.loc[bid, "pass_years"])
-        if py >= 4:
-            good.append(f"passes spread over {py} different years")
+            flags.append(f"over all history {allr*100:.0f}% (mean {all_mean*100:+.1f}%) vs {bh*100:.0f}% (mean {bh_all_mean*100:+.1f}%) for just holding {name}")
+        py = int(len(set(w_years[ok & (R[i] >= PASS)])))
+        if py >= 6:
+            good.append(f"passes spread over {py} different years of history")
         else:
-            flags.append(f"passes come from only {py} year(s)")
+            flags.append(f"passes come from only {py} different year(s) of history")
         if name in CRYPTO:
             flags.append("crypto: results hang on boom years")
         if bots.loc[bid, "mean_trades"] < 2:
             flags.append("makes very few trades per period, so little evidence")
-        if bots.loc[bid, "passes100"] < 0.5 * bots.loc[bid, "passes"]:
+        if not fees_ok:
             flags.append("most passes disappear with $2 fees on $100")
-        if n_fwd >= 6 and fr >= 0.45 and fr >= bh_f + 0.10 and py >= 4 and not (bots.loc[bid, "passes100"] < 0.5 * bots.loc[bid, "passes"]):
+        if keeps and py >= 6 and fees_ok:
             verdict = "CANDIDATE"
-        elif allr >= bh + 0.10 and py >= 4 and (n_fwd < 6 or fr >= 0.35):
+        elif beats_all and py >= 6 and (n_fwd < 6 or fr >= 0.30):
             verdict = "WATCH"
         else:
             verdict = "LUCKY?"
@@ -199,7 +206,7 @@ def frozen_ten(F, frozen, bnds):
     summary = {"windows": len(windows), "first": str(F.dates[windows[0][0]].date()), "port_passes": int((port >= PASS).sum()),
                "port_passes_$100": int((port100 >= PASS).sum()), "port_mean": float(port.mean()), "port_mean_$100": float(port100.mean()),
                "port_worst": float(port.min()), "port_best": float(port.max()), "port_total": float(np.prod(1 + port) - 1),
-               "sp500_passes": int((sp >= PASS).sum()), "sp500_mean": float(np.nanmean(sp)), "ew_passes": int((ew >= PASS).sum()),
+               "sp500_passes": int((sp >= PASS).sum()), "sp500_mean": float(np.nanmean(sp)) if np.isfinite(sp).any() else float("nan"), "ew_passes": int((ew >= PASS).sum()),
                "ew_mean": float(np.nanmean(ew)), "bot_pass_total": int(sum(r["passes"] for r in rows)),
                "bot_slots": len(windows) * len(ids)}
     return pd.DataFrame(rows), summary, {"R": R, "port": port, "windows": windows, "sp": sp}

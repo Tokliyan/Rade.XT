@@ -105,12 +105,6 @@ def yf_probe():
             print(f"  {name:12s} {tk:10s} MISSING")
 
 
-if __name__ == "__main__":
-    for part in sys.argv[1:] or ["wiki", "yf"]:
-        try:
-            {"wiki": wiki, "yf": yf_probe, "speed": lambda: speed()}[part]()
-        except Exception as e:
-            print("PROBE FAILED", part, repr(e))
 
 
 def speed():
@@ -146,4 +140,8 @@ def speed():
 
 
 if __name__ == "__main__":
-    pass
+    for part in sys.argv[1:] or ["wiki", "yf"]:
+        try:
+            {"wiki": wiki, "yf": yf_probe, "speed": lambda: speed()}[part]()
+        except Exception as e:
+            print("PROBE FAILED", part, repr(e))

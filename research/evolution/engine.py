@@ -635,7 +635,7 @@ def block_shuffle_prices(prices: pd.DataFrame, seed, block=20):
     idx = np.concatenate([np.arange(s, s + block) for s in starts])[:T]
     sh = ret.iloc[idx].copy()
     for c in sh.columns:                                       # rows where the asset did not exist yet: draw from its own returns
-        col = sh[c].to_numpy()
+        col = sh[c].to_numpy().copy()
         pool = ret[c].dropna().to_numpy()
         bad = np.isnan(col)
         col[bad] = rng.choice(pool, bad.sum())
