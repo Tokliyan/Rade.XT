@@ -1,9 +1,10 @@
 name: Evolve Research
 
 # Manual-only research run. Never touches Supabase, the live agents or the dashboard.
-# 1) self-test on fake markets (random = must find nothing, planted = must find it)
-# 2) the real run: 1000 bots x 70 generations x several seeds on 1998-today daily data
-# Results are printed in the log and uploaded as a downloadable artifact.
+#   0) self-tests on fake markets (no peeking at the future incl. news; random = finds nothing; planted = finds it; news wiring)
+#   A) widened evolution search: 45 markets, 9 strategy families, macro + news gates, Frozen Ten, Hall of Fame, luck baseline
+#   B) gap scanner: 10 written ideas, one at a time, through the 6 gates
+# Results are printed in the log and committed to research/evolution/results/.
 
 on:
   workflow_dispatch:
@@ -11,14 +12,20 @@ on:
       seeds:
         description: "Independent seeds per cull setting"
         default: "6"
+      nulls:
+        description: "Fake shuffled-market runs for the luck baseline"
+        default: "6"
       exclude:
-        description: "Assets to drop, space separated (e.g. BTC). Leave empty for all."
+        description: "Markets to drop, space separated (e.g. BTC ETH). Leave empty for all."
         default: ""
+
+permissions:
+  contents: write
 
 jobs:
   evolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -27,19 +34,28 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install numpy pandas yfinance
+        run: pip install numpy pandas yfinance requests
 
       - name: Self-test on fake markets
         working-directory: research/evolution
         run: python test_engine.py
 
-      - name: Real-history evolution
+      - name: Test A - widened evolution search
         working-directory: research/evolution
-        run: python run.py --data real --seeds ${{ github.event.inputs.seeds || '6' }} --culls 0.10 0.30 --out out ${{ github.event.inputs.exclude != '' && format('--exclude {0}', github.event.inputs.exclude) || '' }}
+        run: python run.py --data real --seeds ${{ github.event.inputs.seeds || '6' }} --nulls ${{ github.event.inputs.nulls || '6' }} --culls 0.10 0.30 --out out ${{ github.event.inputs.exclude != '' && format('--exclude {0}', github.event.inputs.exclude) || '' }}
 
-      - name: Upload results
+      - name: Test B - gap scanner
+        working-directory: research/evolution
+        run: python scan.py --data real --out out
+
+      - name: Commit results
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: evolve-research-results
-          path: research/evolution/out/
+        run: |
+          mkdir -p research/evolution/results
+          cp research/evolution/out/*.csv research/evolution/out/*.md research/evolution/out/*.json research/evolution/results/ 2>/dev/null || true
+          git config user.name "rade-xt-research"
+          git config user.email "research@users.noreply.github.com"
+          git add research/evolution/results/
+          git diff --cached --quiet || git commit -m "Evolution research: results"
+          git pull --rebase -q origin main || true
+          git push -q origin HEAD:main || true

@@ -139,9 +139,30 @@ def speed():
             time.sleep(5)
 
 
+def peek():
+    for d in ["2015-03-03", "2019-06-11", "2023-02-06"]:
+        d = pd.Timestamp(d)
+        t = title(d)
+        r = requests.get(API, params={"action": "query", "prop": "revisions", "rvprop": "content|timestamp|size", "rvslots": "main", "titles": t, "format": "json", "formatversion": 2}, headers=UA, timeout=30).json()
+        pg = r["query"]["pages"][0]
+        rev = pg["revisions"][0] if "revisions" in pg else None
+        print("== LATEST", t, "missing" if pg.get("missing") else "", rev["timestamp"] if rev else "", rev["size"] if rev else "")
+        if rev:
+            print(rev["slots"]["main"]["content"][:900].replace("\n", " | "))
+        v, dt, sc = pit(d)
+        nxt = (d + pd.Timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+        r = requests.get(API, params={"action": "query", "prop": "revisions", "rvprop": "content|timestamp|size", "rvslots": "main", "rvlimit": 1, "rvstart": nxt, "rvdir": "older", "titles": t, "format": "json", "formatversion": 2}, headers=UA, timeout=30).json()
+        pg = r["query"]["pages"][0]
+        if "revisions" in pg:
+            rev = pg["revisions"][0]
+            print("== PIT", rev["timestamp"], rev["size"])
+            print(rev["slots"]["main"]["content"][:900].replace("\n", " | "))
+        time.sleep(3)
+
+
 if __name__ == "__main__":
     for part in sys.argv[1:] or ["wiki", "yf"]:
         try:
-            {"wiki": wiki, "yf": yf_probe, "speed": lambda: speed()}[part]()
+            {"wiki": wiki, "yf": yf_probe, "speed": lambda: speed(), "peek": peek}[part]()
         except Exception as e:
             print("PROBE FAILED", part, repr(e))
