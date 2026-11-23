@@ -108,6 +108,42 @@ def yf_probe():
 if __name__ == "__main__":
     for part in sys.argv[1:] or ["wiki", "yf"]:
         try:
-            {"wiki": wiki, "yf": yf_probe}[part]()
+            {"wiki": wiki, "yf": yf_probe, "speed": lambda: speed()}[part]()
         except Exception as e:
             print("PROBE FAILED", part, repr(e))
+
+
+def speed():
+    """Latency and status codes for point-in-time page requests at different worker counts and eras."""
+    import collections
+    for label, start in [("2005 (pages mostly absent)", "2005-03-01"), ("2012", "2012-03-01"), ("2023", "2023-03-01")]:
+        for workers in (3, 6):
+            days = pd.date_range(start, periods=90)
+            stat = collections.Counter()
+            lat = []
+
+            def one(d):
+                nxt = (d + pd.Timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+                t0 = time.time()
+                try:
+                    r = requests.get(API, params={"action": "query", "prop": "revisions", "rvprop": "content|timestamp", "rvslots": "main", "rvlimit": 1,
+                                                  "rvstart": nxt, "rvdir": "older", "titles": title(d), "format": "json", "formatversion": 2}, headers=UA, timeout=30)
+                    ok = r.text.startswith("{")
+                    stat[(r.status_code, ok)] += 1
+                    if r.status_code == 429:
+                        stat["retry-after:" + str(r.headers.get("Retry-After"))] += 1
+                except Exception as e:
+                    stat["exc:" + type(e).__name__] += 1
+                lat.append(time.time() - t0)
+
+            t0 = time.time()
+            with cf.ThreadPoolExecutor(workers) as ex:
+                list(ex.map(one, days))
+            tot = time.time() - t0
+            lat.sort()
+            print(f"  {label:28s} workers {workers}: {90/tot:5.1f} req/s, median latency {lat[len(lat)//2]:.2f}s, p90 {lat[int(len(lat)*.9)]:.2f}s, {dict(stat)}", flush=True)
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    pass

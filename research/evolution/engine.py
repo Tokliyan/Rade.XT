@@ -1,5 +1,6 @@
 """
-Evolution engine: 1,000 trading bots, walk-forward through history.
+Evolution engine v2: 1,000 trading bots, walk-forward through history, 9 strategy families,
+free macro + point-in-time news inputs.
 
 Standalone research tool. It never touches Supabase, the live agents or the
 dashboard.
@@ -32,8 +33,10 @@ import pandas as pd
 
 GRID = np.array([5, 8, 10, 13, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250])
 G = len(GRID)
-FAMS = ["trend", "reversion", "breakout", "tsmom", "voltiming", "calendar"]
+FAMS = ["trend", "reversion", "breakout", "tsmom", "voltiming", "calendar", "xsmom", "pairs", "regime"]
 NF = len(FAMS)
+XS_WIN = np.array([20, 40, 60, 120, 250])     # look-backs for cross-market momentum ranking
+XWIN = (1, 5, 20)                              # smoothing windows for macro / news features
 
 # (lo, hi, log-scale?) for gene p1..p4 of each family; None = unused
 RANGES = {
@@ -43,18 +46,57 @@ RANGES = {
     3: [(20, 250, True), (-0.02, 0.10, False), None, None],        # tsmom: window, threshold
     4: [(10, 60, False), (0.08, 0.40, False), (0.0, 1.0, False), None],  # vol timing: window, vol cap, trend-filter flag
     5: [(0, 6, False), (0, 6, False), None, None],                 # calendar: last-N days of month, first-N days of next
+    6: [(0, 4, False), (0.10, 0.50, False), None, None],           # xsmom: ranking window idx, top fraction held
+    7: [(5, 80, True), (0.5, 3.0, False), (-0.5, 1.0, False), None],  # pairs: window, z entry (asset lags partner), z exit
+    8: [(0, 1, False), (50, 250, True), None, None],               # regime: use-trend-filter flag, filter window
 }
+REV_FAMS = (1, 7)                                                  # families that get a max-hold gene
 
 DEATH_DD = 0.30          # die after losing 30% from the period peak
 CULL_DEFAULT = 0.10
 WEIGHTS = np.array([0.4, 0.3, 0.2, 0.1])   # fitness memory: ~20 months
 DD_PENALTY = 0.5
-CRYPTO = {"BTC"}
+CRYPTO = {"BTC", "ETH"}
+
+
+# --------------------------------------------------------------------------- extra inputs (macro + news)
+def _zs(s, win=250, minp=60):
+    m = s.rolling(win, min_periods=minp).mean().shift(1)
+    sd = s.rolling(win, min_periods=minp).std().shift(1)
+    return ((s - m) / sd.replace(0, np.nan)).clip(-4, 4)
+
+
+def make_ext(dates, macro=None, news=None):
+    """Causal, smoothed, z-scored extra inputs aligned to `dates`.
+    Every value on day t uses only data published on or before day t (trailing z-scores, trailing means).
+    Missing data (e.g. news before Wikipedia daily pages existed) becomes 0 = "nothing unusual"."""
+    cols = {}
+    if macro is not None and len(macro):
+        m = macro.sort_index()
+        m = m[~m.index.duplicated()].ffill()
+        cols["vix_level"] = _zs(m["VIX"])
+        cols["vix_jump5"] = _zs(m["VIX"].pct_change(5))
+        cols["yield_curve"] = _zs(m["US10Y"] - m["US13W"], 500, 120)
+        cols["rate_move60"] = _zs(m["US10Y"].diff(60), 500, 120)
+    if news is not None and len(news):
+        n = news[news["ok"] == 1].set_index("date").sort_index()
+        n = n.reindex(pd.date_range(n.index[0], n.index[-1]))          # missing days stay NaN
+        base = {"news_tone": n["pos"] - n["neg"], "news_volume": np.log(n["words"]),
+                "news_conflict": n["conflict"], "news_fincrisis": n["fincrisis"], "news_ratesinfl": n["ratesinfl"],
+                "news_trade": n["trade"], "news_energy": n["energy"], "news_health": n["health"], "news_disaster": n["disaster"]}
+        for k, s in base.items():
+            cols[k] = _zs(s, 250, 60)
+    out = {}
+    for k, s in cols.items():
+        for w in XWIN:
+            sm = s.rolling(w, min_periods=1).mean() if w > 1 else s
+            out[f"{k}@{w}"] = sm.reindex(dates, method="ffill", limit=7).fillna(0.0).clip(-4, 4)
+    return pd.DataFrame(out, index=dates)
 
 
 # --------------------------------------------------------------------------- features
 class Features:
-    def __init__(self, prices: pd.DataFrame, base_cost=0.0025, crypto_cost=0.006,
+    def __init__(self, prices: pd.DataFrame, ext: pd.DataFrame = None, base_cost=0.0025, crypto_cost=0.006,
                  era_cut="2006-01-01", era_mult=1.5):
         prices = prices.sort_index().ffill()
         self.dates = prices.index
@@ -82,6 +124,13 @@ class Features:
         df = pd.DataFrame(LP.T)
         self.HI = np.stack([df.rolling(w, min_periods=w).max().shift(1).to_numpy().T for w in GRID])
         self.LO = np.stack([df.rolling(w, min_periods=w).min().shift(1).to_numpy().T for w in GRID])
+        # cross-market momentum rank (0..1) of each asset's w-day return among all assets with data that day
+        self.RANK = np.full((len(XS_WIN), A, T), np.nan)
+        for i, w in enumerate(XS_WIN):
+            d = df - df.shift(w)
+            rk = d.rank(axis=1, pct=True)
+            rk[(d.notna().sum(axis=1) < 8).to_numpy()] = np.nan
+            self.RANK[i] = rk.to_numpy().T
         ym = np.asarray(self.dates.year * 100 + self.dates.month)
         s = pd.Series(ym)
         dom = s.groupby(s).cumcount().to_numpy()
@@ -90,6 +139,14 @@ class Features:
         self.dtme = size - 1 - dom
         self.cost_vec = np.array([crypto_cost if n in CRYPTO else base_cost for n in self.names])
         self.mult = np.where(self.dates < pd.Timestamp(era_cut), era_mult, 1.0)
+        if ext is not None and ext.shape[1]:
+            assert ext.index.equals(self.dates), "ext must be aligned to the price dates"
+            self.X = ext.to_numpy(float).T.copy()
+            self.xnames = list(ext.columns)
+        else:
+            self.X = np.zeros((0, T))
+            self.xnames = []
+        self.NX = self.X.shape[0]
 
     def sma(self, a, w, t):
         lo = t + 1 - w
@@ -110,11 +167,18 @@ def _draw(lo, hi, lg, rng, n):
     return rng.uniform(lo, hi, n)
 
 
-def rand_genome(fams, rng, n_assets):
+def rand_genome(fams, rng, n_assets, nx=0):
     n = len(fams)
-    g = {"fam": fams.astype(int), "asset": rng.integers(0, n_assets, n),
+    asset = rng.integers(0, n_assets, n)
+    g = {"fam": fams.astype(int), "asset": asset, "partner": (asset + rng.integers(1, max(n_assets, 2), n)) % n_assets,
          "size": rng.uniform(0.25, 1.0, n), "stop": np.exp(rng.uniform(np.log(0.02), np.log(0.25), n)),
          "maxhold": np.full(n, 9999.0)}
+    has = (rng.random(n) < 0.4) if nx > 0 else np.zeros(n, bool)
+    if nx > 0:
+        has |= (g["fam"] == 8)
+    g["gfeat"] = np.where(has, rng.integers(0, max(nx, 1), n), -1)
+    g["gthr"] = rng.uniform(0.5, 2.5, n)
+    g["gdir"] = np.where(rng.random(n) < 0.5, 1.0, -1.0)
     for j in range(4):
         g[f"p{j+1}"] = np.zeros(n)
     for f in range(NF):
@@ -124,7 +188,7 @@ def rand_genome(fams, rng, n_assets):
         for j, spec in enumerate(RANGES[f]):
             if spec is not None:
                 g[f"p{j+1}"][idx] = _draw(*spec, rng, idx.size)
-        if f == 1:
+        if f in REV_FAMS:
             g["maxhold"][idx] = np.exp(rng.uniform(np.log(3), np.log(60), idx.size))
     return g
 
@@ -138,7 +202,7 @@ def put(g, idx, src):
         g[k][idx] = src[k]
 
 
-def mutate(src, rng, n_assets, rate=0.35):
+def mutate(src, rng, n_assets, rate=0.35, nx=0):
     out = {k: v.copy() for k, v in src.items()}
     n = len(out["fam"])
     m = rng.random(n) < rate
@@ -147,6 +211,17 @@ def mutate(src, rng, n_assets, rate=0.35):
     out["stop"] = np.clip(out["stop"] * np.exp(m * rng.normal(0, 0.25, n)), 0.02, 0.25)
     m = rng.random(n) < 0.06
     out["asset"] = np.where(m, rng.integers(0, n_assets, n), out["asset"])
+    m = rng.random(n) < 0.06
+    out["partner"] = np.where(m, rng.integers(0, n_assets, n), out["partner"])
+    out["partner"] = np.where(out["partner"] == out["asset"], (out["asset"] + 1) % n_assets, out["partner"])
+    if nx > 0:
+        m = rng.random(n) < 0.08
+        out["gfeat"] = np.where(m, rng.integers(0, nx, n), out["gfeat"])
+        off = (rng.random(n) < 0.03) & (out["fam"] != 8)
+        out["gfeat"] = np.where(off, -1, out["gfeat"])
+        m = rng.random(n) < rate
+        out["gthr"] = np.clip(out["gthr"] + m * rng.normal(0, 0.3, n), 0.3, 3.0)
+        out["gdir"] = np.where(rng.random(n) < 0.03, -out["gdir"], out["gdir"])
     for f in range(NF):
         idx = np.where(out["fam"] == f)[0]
         if not idx.size:
@@ -161,7 +236,7 @@ def mutate(src, rng, n_assets, rate=0.35):
                 out[k][idx] = np.clip(out[k][idx] * np.exp(m * rng.normal(0, 0.2, idx.size)), lo, hi)
             else:
                 out[k][idx] = np.clip(out[k][idx] + m * rng.normal(0, 0.15 * (hi - lo), idx.size), lo, hi)
-        if f == 1:
+        if f in REV_FAMS:
             m = rng.random(idx.size) < rate
             out["maxhold"][idx] = np.clip(out["maxhold"][idx] * np.exp(m * rng.normal(0, 0.25, idx.size)), 3, 60)
     return out
@@ -183,6 +258,10 @@ def run(F: Features, g, t0, t1, rec=False, cost_scale=1.0):
     blocked = np.zeros(N, bool)
     trades = np.zeros(N)
     costv = F.cost_vec[a] * cost_scale * size
+    gf = g["gfeat"].astype(int)
+    has_g = (gf >= 0) & (F.NX > 0)
+    gthr, gdir = g["gthr"], g["gdir"]
+    gfi = np.maximum(gf, 0)
 
     fi = [np.where(g["fam"] == f)[0] for f in range(NF)]
     pre = {}
@@ -206,6 +285,15 @@ def run(F: Features, g, t0, t1, rec=False, cost_scale=1.0):
     if fi[5].size:
         i = fi[5]
         pre[5] = (a[i], np.round(g["p1"][i]).astype(int), np.round(g["p2"][i]).astype(int))
+    if fi[6].size:
+        i = fi[6]
+        pre[6] = (a[i], np.clip(np.round(g["p1"][i]).astype(int), 0, len(XS_WIN) - 1), g["p2"][i])
+    if fi[7].size:
+        i = fi[7]
+        pre[7] = (a[i], g["partner"][i], np.round(g["p1"][i]).astype(int), g["p2"][i], g["p3"][i])
+    if fi[8].size:
+        i = fi[8]
+        pre[8] = (a[i], g["p1"][i] > 0.5, np.round(g["p2"][i]).astype(int))
 
     def want_at(t):
         w = np.zeros(N, bool)
@@ -248,7 +336,30 @@ def run(F: Features, g, t0, t1, rec=False, cost_scale=1.0):
         if 5 in pre:
             aa, tin, tout = pre[5]
             w[fi[5]] = (F.dtme[t] < tin) | (F.dom[t] < tout)
+        if 6 in pre:
+            aa, wi, top = pre[6]
+            rk = F.RANK[wi, aa, t]
+            cur = inpos[fi[6]]
+            w[fi[6]] = ~np.isnan(rk) & ((rk >= 1 - top) | (cur & (rk >= 1 - top - 0.15)))
+        if 7 in pre:
+            aa, bb, win, ze, zx = pre[7]
+            lo = t + 1 - win
+            ok = (lo >= F.start[aa] + 1) & (lo >= F.start[bb] + 1)
+            lo = np.maximum(lo, 0)
+            rel = (F.Rc[aa, t + 1] - F.Rc[aa, lo]) - (F.Rc[bb, t + 1] - F.Rc[bb, lo])
+            va = (F.R2c[aa, t + 1] - F.R2c[aa, lo]) / win
+            vb = (F.R2c[bb, t + 1] - F.R2c[bb, lo]) / win
+            z = rel / np.sqrt(win * (va + vb) + 1e-12)
+            cur = inpos[fi[7]]
+            w[fi[7]] = ok & (((~cur) & (z < -ze)) | (cur & (z <= zx)))
+        if 8 in pre:
+            aa, filt, win = pre[8]
+            m, ok = F.sma(aa, win, t)
+            w[fi[8]] = np.where(filt, ok & (LP[aa, t] > m), True)
         w &= ~np.isnan(C[a, t])
+        if has_g.any():
+            xv = F.X[gfi, t]
+            w &= ~(has_g & (gdir * xv > gthr))          # the gate: step aside when the chosen macro/news input is extreme
         return w & ~dead
 
     pending = want_at(t0 - 1)
@@ -339,7 +450,7 @@ def fitness_of(hist):
     return np.where(den > 0, num / np.maximum(den, 1e-12), -9.0)
 
 
-def pick_committee(fit, fam, K=20, per_fam=5, exclude=None):
+def pick_committee(fit, fam, K=10, per_fam=3, exclude=None):
     order = np.argsort(-fit)
     cnt = np.zeros(NF, int)
     chosen = []
@@ -355,12 +466,21 @@ def pick_committee(fit, fam, K=20, per_fam=5, exclude=None):
     return np.array(chosen, int)
 
 
+
+def net100_of(F, g, ret, trades, t0):
+    """Approximate the period return for a $100 account paying a flat $2 per trade instead of the model's % cost."""
+    model = F.cost_vec[g["asset"]] * g["size"] * F.mult[t0]
+    return ret - trades * (0.02 - model)
+
+
 def evolve(F: Features, pop=1000, cull=CULL_DEFAULT, seed=0, start="1998-01-01", holdout="2018-01-01",
-           K=20, immigrants=0.05, cost_scale=1.0, verbose=False):
+           K=10, per_fam=3, immigrants=0.05, cost_scale=1.0, verbose=False):
+    """Walk-forward evolution. Also records every bot's every period (for the Hall of Fame) and
+    freezes the top K (selected on data strictly before `holdout`) for the Frozen Ten test."""
     rng = np.random.default_rng(seed)
-    A = F.A
+    A, NX = F.A, F.NX
     fams = np.arange(pop) % NF
-    g = rand_genome(fams, rng, A)
+    g = rand_genome(fams, rng, A, NX)
     hist = np.full((pop, len(WEIGHTS)), np.nan)
     bnds = boundaries(F.dates, start)
     bnds = bnds + [F.T - 1] if bnds[-1] < F.T - 2 else bnds
@@ -369,12 +489,30 @@ def evolve(F: Features, pop=1000, cull=CULL_DEFAULT, seed=0, start="1998-01-01",
     committee = None
     frozen = None
     rows = []
+    # ---- identities, parents, lineages, genome archive, per-period records
+    bid = np.arange(pop)
+    lin_slot = bid.copy()
+    next_id = pop
+    arch = [(bid.copy(), np.full(pop, -1), bid.copy(), np.zeros(pop, int), take(g, np.arange(pop)))]
+    rec = {"bid": [], "gen": [], "t0": [], "days": [], "ret": [], "ddmax": [], "trades": [], "dead": [], "net100": []}
+
+    def register(slots, parents, lineages, gen):
+        nonlocal next_id
+        ids = np.arange(next_id, next_id + len(slots))
+        next_id += len(slots)
+        bid[slots] = ids
+        lin_slot[slots] = ids if lineages is None else lineages
+        arch.append((ids, parents, lin_slot[slots].copy(), np.full(len(slots), gen), take(g, slots)))
+
     for b in range(len(bnds) - 1):
         t0, t1 = bnds[b], bnds[b + 1]
         res = run(F, g, t0, t1, cost_scale=cost_scale)
         ret = res["eq"] / 100.0 - 1.0
         score = ret - DD_PENALTY * res["ddmax"]
-        row = {"start": F.dates[t0], "end": F.dates[t1], "days": t1 - t0, "pop_mean": float(ret.mean()),
+        rec["bid"].append(bid.copy()); rec["gen"].append(np.full(pop, b)); rec["t0"].append(np.full(pop, t0)); rec["days"].append(np.full(pop, t1 - t0))
+        rec["ret"].append(ret); rec["ddmax"].append(res["ddmax"]); rec["trades"].append(res["trades"]); rec["dead"].append(res["dead"])
+        rec["net100"].append(net100_of(F, g, ret, res["trades"], t0))
+        row = {"start": F.dates[t0], "end": F.dates[t1], "t0": t0, "t1": t1, "days": t1 - t0, "pop_mean": float(ret.mean()),
                "pop_med": float(np.median(ret)), "best_ret": float(ret.max()), "dead_frac": float(res["dead"].mean()),
                "era": "hold" if t0 >= hold_idx else "train"}
         if committee is not None:
@@ -386,18 +524,19 @@ def evolve(F: Features, pop=1000, cull=CULL_DEFAULT, seed=0, start="1998-01-01",
         hist[:, 1:] = hist[:, :-1]
         hist[:, 0] = score
         fit = fitness_of(hist)
-        committee = pick_committee(fit, g["fam"], K)
+        committee = pick_committee(fit, g["fam"], K, per_fam)
         if frozen is None and t1 == hold_idx:
-            frozen = (take(g, committee), t1)      # freeze genomes selected on data strictly before the holdout
+            frozen = (take(g, committee), t1, bid[committee].copy())      # genomes chosen on data strictly before the holdout
         # ---- selection: immigrants, then per-island kill & clone
         protect = np.zeros(pop, bool)
         protect[committee] = True
         n_imm = int(immigrants * pop)
         order = np.argsort(fit + protect * 1e6)
         imm = order[:n_imm]
-        newg = rand_genome(rng.integers(0, NF, n_imm), rng, A)
+        newg = rand_genome(rng.integers(0, NF, n_imm), rng, A, NX)
         put(g, imm, newg)
         hist[imm] = np.nan
+        register(imm, np.full(n_imm, -1), None, b + 1)
         births += n_imm
         taken = np.zeros(pop, bool)
         taken[imm] = True
@@ -413,24 +552,41 @@ def evolve(F: Features, pop=1000, cull=CULL_DEFAULT, seed=0, start="1998-01-01",
             winners = winners[: losers.size]
             if not losers.size:
                 continue
-            kids = mutate(take(g, winners), rng, A)
+            kids = mutate(take(g, winners), rng, A, nx=NX)
             swap = rng.random(losers.size) < 0.15
             if swap.any():
                 mates = winners[rng.integers(0, winners.size, losers.size)]
                 for j in range(1, 5):
                     kids[f"p{j}"] = np.where(swap & (g["fam"][mates] == f), g[f"p{j}"][mates], kids[f"p{j}"])
+            parent_ids, parent_lin = bid[winners].copy(), lin_slot[winners].copy()
             put(g, losers, kids)
             hist[losers] = hist[winners]
+            register(losers, parent_ids, parent_lin, b + 1)
             births += losers.size
         if verbose and b % 10 == 0:
             print(f"  gen {b:2d} {F.dates[t0].date()}  pop {ret.mean():+.3f}  comm_next {rows[-1].get('comm_ret', float('nan')):+.3f}")
-    out = {"rows": pd.DataFrame(rows), "births": births, "final_genomes": g}
-    out["frozen"] = frozen
-    return out
+    perf = pd.DataFrame({k: np.concatenate(v) for k, v in rec.items()})
+    gen_tbl = pd.concat([pd.DataFrame({"bid": ids, "parent": par, "lineage": lin, "birth_gen": bg, **{k: v for k, v in gg.items()}})
+                         for ids, par, lin, bg, gg in arch], ignore_index=True)
+    return {"rows": pd.DataFrame(rows), "births": births, "final_genomes": g, "frozen": frozen, "perf": perf,
+            "genomes": gen_tbl, "bnds": bnds, "hold_idx": hold_idx}
+
+
+def window_returns(F: Features, g, windows, cost_scale=1.0):
+    """Run genomes through each (t0, t1) window from a flat start. Returns net-of-model-cost returns, trades, ddmax matrices [N, W]."""
+    N = len(g["fam"])
+    R = np.zeros((N, len(windows))); Tr = np.zeros_like(R); DD = np.zeros_like(R); N100 = np.zeros_like(R)
+    for w, (a, b) in enumerate(windows):
+        res = run(F, g, a, b, cost_scale=cost_scale)
+        R[:, w] = res["eq"] / 100.0 - 1.0
+        Tr[:, w] = res["trades"]
+        DD[:, w] = res["ddmax"]
+        N100[:, w] = net100_of(F, g, R[:, w], Tr[:, w], a)
+    return R, Tr, DD, N100
 
 
 def freeze_and_test(F: Features, frozen, cost_scale=1.0):
-    gfz, t0 = frozen
+    gfz, t0 = frozen[0], frozen[1]
     res = run(F, gfz, t0, F.T, rec=True, cost_scale=cost_scale)
     port = res["hist"].mean(axis=1)
     yrs = (F.T - t0) / 252
@@ -456,3 +612,47 @@ def benchmark_stats(F: Features, t0, t1):
     rp = (R * avail).sum(axis=0) / n
     out["EqualWeight"] = curve_stats(np.r_[1.0, np.cumprod(1 + rp)])
     return out
+
+
+def buyhold_windows(F: Features, windows):
+    """Buy-and-hold return of every asset in every window (NaN if the asset had no data at the window start). [A, W]"""
+    out = np.full((F.A, len(windows)), np.nan)
+    for w, (a, b) in enumerate(windows):
+        ok = F.start <= a
+        out[ok, w] = F.C[ok, b] / F.C[ok, a] - 1.0
+    return out
+
+
+def block_shuffle_prices(prices: pd.DataFrame, seed, block=20):
+    """Null market: re-order the real daily returns in blocks. Keeps each asset's return distribution, volatility clusters
+    and cross-asset links inside a block, but destroys every real link between today and tomorrow beyond ~a month."""
+    rng = np.random.default_rng(seed)
+    px = prices.sort_index().ffill()
+    ret = px.pct_change()
+    T = len(ret)
+    nb = int(np.ceil(T / block))
+    starts = rng.integers(0, T - block, nb)
+    idx = np.concatenate([np.arange(s, s + block) for s in starts])[:T]
+    sh = ret.iloc[idx].copy()
+    for c in sh.columns:                                       # rows where the asset did not exist yet: draw from its own returns
+        col = sh[c].to_numpy()
+        pool = ret[c].dropna().to_numpy()
+        bad = np.isnan(col)
+        col[bad] = rng.choice(pool, bad.sum())
+        sh[c] = col
+    sh.index = ret.index
+    first = {c: px[c].first_valid_index() for c in px.columns}
+    out = 100 * (1 + sh.clip(-0.4, 0.4)).cumprod()
+    for c in out.columns:
+        out.loc[out.index < first[c], c] = np.nan
+    return out
+
+
+def block_shuffle_rows(df: pd.DataFrame, seed, block=20):
+    """Same block shuffle for the extra inputs (macro/news), independently of prices, so any link between them and returns is cut."""
+    rng = np.random.default_rng(seed + 7919)
+    T = len(df)
+    nb = int(np.ceil(T / block))
+    starts = rng.integers(0, max(T - block, 1), nb)
+    idx = np.concatenate([np.arange(s, s + block) for s in starts])[:T]
+    return pd.DataFrame(df.to_numpy()[idx], index=df.index, columns=df.columns)

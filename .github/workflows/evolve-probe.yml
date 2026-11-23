@@ -3,6 +3,10 @@ name: Evolve Probe
 # Manual-only. Checks that free keyless data sources are reachable and how fast they are.
 on:
   workflow_dispatch:
+    inputs:
+      parts:
+        description: "probe parts: wiki yf speed"
+        default: "wiki yf"
 
 jobs:
   probe:
@@ -16,4 +20,4 @@ jobs:
       - run: pip install numpy pandas yfinance requests
       - name: Probe sources
         working-directory: research/evolution
-        run: python probe.py wiki yf
+        run: python probe.py ${{ github.event.inputs.parts || 'wiki yf' }}
